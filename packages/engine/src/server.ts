@@ -53,7 +53,17 @@ app.post('/webhooks/retell/call-ended', async (req, res) => {
       callStatus: call_status,
       disposition: call_analysis?.call_summary || call_status,
       transcript,
-      qualificationData: call_analysis?.custom_analysis_data,
+      qualificationData: call_analysis?.custom_analysis_data
+        ? {
+            budget: call_analysis.custom_analysis_data.lead_budget,
+            timelineDays: call_analysis.custom_analysis_data.lead_timeline_days,
+            decisionMaker: call_analysis.custom_analysis_data.lead_is_decision_maker,
+            intent: call_analysis.custom_analysis_data.lead_intent,
+            propertyType: call_analysis.custom_analysis_data.lead_property_type,
+            readyForAppointment: call_analysis.custom_analysis_data.lead_ready_for_appointment,
+            appointmentPreference: call_analysis.custom_analysis_data.lead_appointment_preference,
+          }
+        : undefined,
     });
 
     if (result.shouldSmsFallback) {

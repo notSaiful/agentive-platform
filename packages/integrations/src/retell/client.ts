@@ -5,8 +5,10 @@ interface RetellConfig {
 
 interface CreateCallParams {
   agentId: string;
-  phoneNumber: string;
+  fromNumber: string;
+  toNumber: string;
   metadata?: Record<string, string>;
+  dynamicVariables?: Record<string, string>;
 }
 
 interface CallResult {
@@ -45,9 +47,11 @@ export class RetellClient {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        agent_id: params.agentId,
-        phone_number: params.phoneNumber,
+        from_number: params.fromNumber,
+        to_number: params.toNumber,
+        override_agent_id: params.agentId,
         metadata: params.metadata || {},
+        retell_llm_dynamic_variables: params.dynamicVariables || {},
       }),
     });
 

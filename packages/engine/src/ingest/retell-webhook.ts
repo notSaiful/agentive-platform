@@ -11,7 +11,7 @@ interface CallEndedInput {
   qualificationData?: {
     budget?: string;
     timelineDays?: number;
-    decisionMaker?: string;
+    decisionMaker?: boolean | string;
     intent?: string;
     propertyType?: string;
     readyForAppointment?: boolean;
@@ -57,14 +57,19 @@ export async function handleRetellCallEnded(input: CallEndedInput): Promise<Call
   }
 
   const intentSignals: string[] = [];
-  if (qData.intent === 'ready_to_buy') intentSignals.push('ready to buy');
-  if (qData.intent === 'serious') intentSignals.push('serious');
-  if (qData.intent === 'exploring') intentSignals.push('just browsing');
+  const intent = qData.intent?.toLowerCase() ?? '';
+  if (intent === 'ready_to_buy' || intent === 'pre-approved') intentSignals.push('ready to buy');
+  if (intent === 'seriously_looking' || intent === 'serious') intentSignals.push('serious');
+  if (intent === 'just_browsing' || intent === 'exploring' || intent === 'just looking') intentSignals.push('just browsing');
+
+  const isDecisionMaker = qData.decisionMaker === 'yes' || qData.decisionMaker === true;
+  const budget = qData.budget;
+  const timelineDays = qData.timelineDays ?? null;
 
   const scoreResult = scoreLead({
-    budgetIdentified: !!qData.budget,
-    timelineDays: qData.timelineDays ?? null,
-    isDecisionMaker: qData.decisionMaker === 'yes',
+    budgetIdentified: !!budget,
+    timelineDays,
+    isDecisionMaker,
     intentSignals,
   });
 

@@ -17,7 +17,8 @@ describe('RetellClient', () => {
 
     const result = await client.createPhoneCall({
       agentId: 'agent_abc',
-      phoneNumber: '+15551234567',
+      fromNumber: '+16414589112',
+      toNumber: '+15551234567',
       metadata: { leadId: 'lead_1', contactId: 'contact_1' },
     });
 
@@ -67,7 +68,8 @@ describe('RetellClient', () => {
 
     await expect(client.createPhoneCall({
       agentId: 'agent_abc',
-      phoneNumber: '+15551234567',
+      fromNumber: '+16414589112',
+      toNumber: '+15551234567',
     })).rejects.toThrow('Retell API error: 401');
   });
 });

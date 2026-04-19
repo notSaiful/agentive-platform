@@ -80,7 +80,7 @@ describe('SpeedToLeadAgent', () => {
     });
 
     expect(mockRetellClient.createPhoneCall).toHaveBeenCalledWith(
-      expect.objectContaining({ phoneNumber: '+15551234567' })
+      expect.objectContaining({ toNumber: '+15551234567' })
     );
     expect(result.responseMessage).toContain('Voice call initiated');
   });

@@ -90,8 +90,13 @@ export class SpeedToLeadAgent {
       try {
         const { callId } = await this.retell.createPhoneCall({
           agentId: this.retellAgentId,
-          phoneNumber: contact.phone,
+          fromNumber: process.env.TWILIO_PHONE_NUMBER ?? '',
+          toNumber: contact.phone,
           metadata: { leadId: input.leadId, contactId: input.contactId },
+          dynamicVariables: {
+            event_type_id: process.env.CAL_EVENT_TYPE_ID ?? '5413213',
+            specialist_phone_number: process.env.SPECIALIST_PHONE_NUMBER ?? '',
+          },
         });
 
         await prisma.lead.update({
