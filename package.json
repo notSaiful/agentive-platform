@@ -12,6 +12,7 @@
     "db:migrate": "prisma migrate dev --schema=packages/engine/prisma/schema.prisma",
     "db:studio": "prisma studio --schema=packages/engine/prisma/schema.prisma"
   },
+  "packageManager": "npm@10.9.2",
   "devDependencies": {
     "@prisma/client": "^6.19.3",
     "prisma": "^6.19.3",

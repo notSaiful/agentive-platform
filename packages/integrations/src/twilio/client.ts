@@ -3,7 +3,8 @@ import { COMPLIANCE } from '@agentive/shared';
 
 interface TwilioConfig {
   accountSid: string;
-  authToken: string;
+  apiKeySid: string;
+  apiKeySecret: string;
   phoneNumber: string;
 }
 
@@ -12,7 +13,9 @@ export class TwilioClient {
   private phoneNumber: string;
 
   constructor(config: TwilioConfig) {
-    this.client = twilio(config.accountSid, config.authToken);
+    this.client = twilio(config.apiKeySid, config.apiKeySecret, {
+      accountSid: config.accountSid,
+    });
     this.phoneNumber = config.phoneNumber;
   }
 

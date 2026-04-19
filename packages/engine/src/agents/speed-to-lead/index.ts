@@ -1,4 +1,4 @@
-import { ClaudeClient } from '../../llm/client.js';
+import { OpenRouterClient, RetellClient, TwilioClient } from '@agentive/integrations';
 import { QUALIFICATION_STARTER_PROMPT } from '../../llm/prompts/qualification-starter.js';
 import { CONVERSATION_LOOP_PROMPT } from '../../llm/prompts/conversation-loop.js';
 import { scoreLead } from './scorer.js';
@@ -21,6 +21,12 @@ interface LeadReplyInput {
   channel: string;
 }
 
+interface CallNoAnswerInput {
+  leadId: string;
+  contactId: string;
+  callId: string;
+}
+
 interface AgentResult {
   leadId: string;
   responseMessage: string;
@@ -30,13 +36,33 @@ interface AgentResult {
   classification?: string;
 }
 
-export class SpeedToLeadAgent {
-  private claude: ClaudeClient;
+interface AgentConfig {
+  retellClient: RetellClient;
+  openRouterClient: OpenRouterClient;
+  twilioClient: TwilioClient;
+}
 
-  constructor(claudeClient?: ClaudeClient) {
-    this.claude = claudeClient ?? new ClaudeClient({
-      apiKey: process.env.ANTHROPIC_API_KEY ?? '',
+export class SpeedToLeadAgent {
+  private retell: RetellClient;
+  private llm: OpenRouterClient;
+  private twilio: TwilioClient;
+  private retellAgentId: string;
+
+  constructor(config?: AgentConfig) {
+    this.retell = config?.retellClient ?? new RetellClient({
+      apiKey: process.env.RETELL_API_KEY ?? '',
     });
+    this.llm = config?.openRouterClient ?? new OpenRouterClient({
+      apiKey: process.env.OPENROUTER_API_KEY ?? '',
+      model: process.env.OPENROUTER_MODEL,
+    });
+    this.twilio = config?.twilioClient ?? new TwilioClient({
+      accountSid: process.env.TWILIO_ACCOUNT_SID ?? '',
+      apiKeySid: process.env.TWILIO_API_KEY_SID ?? '',
+      apiKeySecret: process.env.TWILIO_API_KEY_SECRET ?? '',
+      phoneNumber: process.env.TWILIO_PHONE_NUMBER ?? '',
+    });
+    this.retellAgentId = process.env.RETELL_AGENT_ID ?? '';
   }
 
   async processInboundLead(input: InboundLeadInput): Promise<AgentResult> {
@@ -51,11 +77,61 @@ export class SpeedToLeadAgent {
       hasConsent: input.channel === 'sms' ? contact.smsConsent : contact.emailConsent,
     });
 
+    if (!guardrailResult.allowed) {
+      return {
+        leadId: input.leadId,
+        responseMessage: `Blocked: ${guardrailResult.reason}`,
+        qualificationComplete: false,
+      };
+    }
+
+    // Try voice call first if lead has phone and agent is configured
+    if (contact.phone && this.retellAgentId && input.channel === 'phone') {
+      try {
+        const { callId } = await this.retell.createPhoneCall({
+          agentId: this.retellAgentId,
+          fromNumber: process.env.TWILIO_PHONE_NUMBER ?? '',
+          toNumber: contact.phone,
+          metadata: { leadId: input.leadId, contactId: input.contactId },
+          dynamicVariables: {
+            event_type_id: process.env.CAL_EVENT_TYPE_ID ?? '5413213',
+            specialist_phone_number: process.env.SPECIALIST_PHONE_NUMBER ?? '',
+          },
+        });
+
+        await prisma.lead.update({
+          where: { id: input.leadId },
+          data: { status: 'contacted', firstResponseAt: new Date() },
+        });
+
+        await prisma.communicationEvent.create({
+          data: {
+            leadId: input.leadId,
+            contactId: contact.id,
+            channel: 'phone',
+            direction: 'outbound',
+            content: `Retell call initiated: ${callId}`,
+            metadata: { callId, agentId: this.retellAgentId },
+          },
+        });
+
+        return {
+          leadId: input.leadId,
+          responseMessage: `Voice call initiated (callId: ${callId})`,
+          qualificationComplete: false,
+        };
+      } catch (err) {
+        console.error('Retell call failed, falling back to SMS:', err);
+      }
+    }
+
+    // SMS path
     const firstName = contact.firstName || 'there';
     const systemPrompt = QUALIFICATION_STARTER_PROMPT.replace('{name}', firstName);
-    const responseMessage = await this.claude.chat(systemPrompt, [
-      { role: 'user', content: input.message },
-    ]);
+    const responseMessage = await this.llm.chat(
+      [{ role: 'user', content: input.message }],
+      systemPrompt
+    );
 
     await prisma.lead.update({
       where: { id: input.leadId },
@@ -68,20 +144,85 @@ export class SpeedToLeadAgent {
       data: {
         conversationId: conversation.id,
         role: 'agent',
-        channel: input.channel,
+        channel: 'sms',
         content: responseMessage,
       },
     });
 
-    if (guardrailResult.allowed) {
-      globalEmitter.emit({
-        id: `evt_${Date.now()}`,
-        type: 'message.outbound' as const,
-        payload: { leadId: input.leadId, channel: input.channel, content: responseMessage },
-        timestamp: new Date(),
-        source: 'agent' as const,
-      });
+    if (contact.phone && this.twilio.canSendNow(contact.timezone)) {
+      try {
+        await this.twilio.sendSms(contact.phone, responseMessage);
+      } catch (err) {
+        console.error('Twilio SMS send failed:', err);
+      }
     }
+
+    globalEmitter.emit({
+      id: `evt_${Date.now()}`,
+      type: 'message.outbound' as const,
+      payload: { leadId: input.leadId, channel: 'sms', content: responseMessage },
+      timestamp: new Date(),
+      source: 'agent' as const,
+    });
+
+    return {
+      leadId: input.leadId,
+      responseMessage,
+      qualificationComplete: false,
+    };
+  }
+
+  async handleCallNoAnswer(input: CallNoAnswerInput): Promise<AgentResult> {
+    const contact = await prisma.contact.findUnique({ where: { id: input.contactId } });
+    if (!contact || !contact.phone) {
+      return {
+        leadId: input.leadId,
+        responseMessage: 'No phone on file for SMS fallback',
+        qualificationComplete: false,
+      };
+    }
+
+    const guardrailResult = checkGuardrails({
+      channel: 'sms',
+      localHour: new Date().getHours(),
+      hasConsent: contact.smsConsent,
+    });
+
+    if (!guardrailResult.allowed) {
+      return {
+        leadId: input.leadId,
+        responseMessage: `SMS blocked: ${guardrailResult.reason}`,
+        qualificationComplete: false,
+      };
+    }
+
+    const firstName = contact.firstName || 'there';
+    const systemPrompt = QUALIFICATION_STARTER_PROMPT.replace('{name}', firstName);
+    const responseMessage = await this.llm.chat(
+      [{ role: 'user', content: 'Lead did not answer phone call' }],
+      systemPrompt
+    );
+
+    const conversation = await this.getOrCreateConversation(input.leadId, input.contactId);
+
+    await prisma.message.create({
+      data: {
+        conversationId: conversation.id,
+        role: 'agent',
+        channel: 'sms',
+        content: responseMessage,
+      },
+    });
+
+    await this.twilio.sendSms(contact.phone, responseMessage);
+
+    globalEmitter.emit({
+      id: `evt_${Date.now()}`,
+      type: 'message.outbound' as const,
+      payload: { leadId: input.leadId, channel: 'sms', content: responseMessage },
+      timestamp: new Date(),
+      source: 'agent' as const,
+    });
 
     return {
       leadId: input.leadId,
@@ -110,7 +251,7 @@ export class SpeedToLeadAgent {
     });
 
     const history = conversation.messages.map(m => ({
-      role: m.role as 'user' | 'assistant',
+      role: (m.role === 'agent' ? 'assistant' : 'user') as 'user' | 'assistant',
       content: m.content,
     }));
     history.push({ role: 'user', content: input.message });
@@ -120,13 +261,29 @@ export class SpeedToLeadAgent {
 
     const systemPrompt = CONVERSATION_LOOP_PROMPT
       .replace('{qualification_data}', JSON.stringify(qualificationData))
-      .replace('{remaining_fields}', remainingFields.join(', '))
-      .replace('{conversation_history}', history.map(m => `${m.role}: ${m.content}`).join('\n'));
+      .replace('{remaining_fields}', remainingFields.join(', '));
 
-    const responseText = await this.claude.chat(systemPrompt, history.slice(-4));
+    const recentMessages = history.slice(-4).map(m => ({
+      role: m.role,
+      content: m.content,
+    }));
+    const responseText = await this.llm.chat(recentMessages, systemPrompt);
 
     if (responseText.startsWith('ROUTE:')) {
-      return await this.handleRouteDirective(input.leadId, responseText, qualificationData);
+      const routePayload = responseText.replace('ROUTE:', '').trim();
+      if (routePayload === 'disqualify') {
+        await prisma.lead.update({
+          where: { id: input.leadId },
+          data: { status: 'disqualified' },
+        });
+        return {
+          leadId: input.leadId,
+          responseMessage: 'Lead disqualified',
+          qualificationComplete: true,
+          route: 'DISQUALIFY',
+        };
+      }
+      return await this.handleRouteDirective(input.leadId, qualificationData);
     }
 
     await prisma.message.create({
@@ -138,6 +295,15 @@ export class SpeedToLeadAgent {
       },
     });
 
+    const contact = await prisma.contact.findUnique({ where: { id: lead.contactId } });
+    if (contact?.phone && input.channel === 'sms' && this.twilio.canSendNow(contact.timezone)) {
+      try {
+        await this.twilio.sendSms(contact.phone, responseText);
+      } catch (err) {
+        console.error('Twilio SMS send failed:', err);
+      }
+    }
+
     return {
       leadId: input.leadId,
       responseMessage: responseText,
@@ -145,8 +311,7 @@ export class SpeedToLeadAgent {
     };
   }
 
-  private async handleRouteDirective(leadId: string, directive: string, qualData: Record<string, unknown>): Promise<AgentResult> {
-    const routeType = directive.replace('ROUTE:', '').split(':')[0];
+  private async handleRouteDirective(leadId: string, qualData: Record<string, unknown>): Promise<AgentResult> {
     const scoreResult = scoreLead({
       budgetIdentified: !!qualData.budget,
       timelineDays: qualData.timelineDays as number | null,

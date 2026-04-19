@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { prisma } from '../db/client.js';
-import { COMPLIANCE } from '@agentive/shared';
+import { COMPLIANCE, globalEmitter } from '@agentive/shared';
 
 export async function handleInboundSms(req: Request, res: Response): Promise<void> {
   const { From, Body, MessageSid } = req.body;
