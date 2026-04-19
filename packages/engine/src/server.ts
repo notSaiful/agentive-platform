@@ -2,6 +2,7 @@ import express from 'express';
 import dotenv from 'dotenv';
 import { handleLeadWebhook } from './ingest/lead-webhook.js';
 import { handleInboundSms } from './ingest/sms-webhook.js';
+import { handleRetellCallEnded } from './ingest/retell-webhook.js';
 import { globalEmitter } from '@agentive/shared';
 import { SpeedToLeadAgent } from './agents/speed-to-lead/index.js';
 import { calculateKPIs } from './analytics/kpi-tracker.js';
@@ -18,7 +19,7 @@ const agent = new SpeedToLeadAgent();
 globalEmitter.on('lead.created', async (event) => {
   const { leadId, contactId, source, message } = event.payload as Record<string, string>;
   try {
-    await agent.processInboundLead({ leadId, contactId, source, message, channel: 'sms' });
+    await agent.processInboundLead({ leadId, contactId, source, message, channel: 'phone' });
   } catch (err) {
     console.error('Error processing lead:', err);
   }
@@ -36,6 +37,42 @@ globalEmitter.on('message.inbound', async (event) => {
 // Webhook endpoints
 app.post('/webhooks/leads', handleLeadWebhook);
 app.post('/webhooks/sms/inbound', handleInboundSms);
+app.post('/webhooks/retell/call-ended', async (req, res) => {
+  try {
+    const { call_id, call_status, call_analysis, metadata, transcript } = req.body;
+
+    const leadId = metadata?.leadId;
+    if (!leadId) {
+      res.status(400).json({ error: 'Missing leadId in metadata' });
+      return;
+    }
+
+    const result = await handleRetellCallEnded({
+      callId: call_id,
+      leadId,
+      callStatus: call_status,
+      disposition: call_analysis?.call_summary || call_status,
+      transcript,
+      qualificationData: call_analysis?.custom_analysis_data,
+    });
+
+    if (result.shouldSmsFallback) {
+      const contactId = metadata?.contactId;
+      if (contactId) {
+        await agent.handleCallNoAnswer({
+          leadId,
+          contactId,
+          callId: call_id,
+        });
+      }
+    }
+
+    res.json({ status: 'processed', result });
+  } catch (err) {
+    console.error('Retell webhook error:', err);
+    res.status(500).json({ error: 'Internal error' });
+  }
+});
 
 // Health check
 app.get('/health', (_req, res) => res.json({ status: 'ok', agent: 'speed-to-lead' }));
