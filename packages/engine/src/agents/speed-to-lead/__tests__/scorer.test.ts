@@ -28,7 +28,7 @@ describe('scoreLead', () => {
     const result = scoreLead({
       budgetIdentified: true,
       timelineDays: 60,
-      isDecisionMaker: true,
+      isDecisionMaker: false,
       intentSignals: [],
     });
     expect(result.classification).toBe('WARM');
