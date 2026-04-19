@@ -5,6 +5,8 @@ export const EventType = z.enum([
   'lead.updated',
   'message.inbound',
   'message.outbound',
+  'call.initiated',
+  'call.completed',
   'qualification.completed',
   'appointment.booked',
   'appointment.confirmed',
