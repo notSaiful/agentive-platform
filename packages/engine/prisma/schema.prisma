@@ -21,6 +21,7 @@ model Contact {
   leads           Lead[]
   conversations   Conversation[]
   appointments    Appointment[]
+  broker          Broker?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -41,6 +42,7 @@ model Lead {
   conversations    Conversation[]
   appointments     Appointment[]
   escalations     Escalation[]
+  tenantApp       TenantApplication?
   firstResponseAt  DateTime?
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
@@ -155,4 +157,82 @@ model Outcome {
 
   @@index([leadId])
   @@index([type])
+}
+
+// ---------------------------------------------------------------------------
+// CRE DOMAIN MODELS
+// ---------------------------------------------------------------------------
+
+model Property {
+  id              String    @id @default(cuid())
+  name            String?
+  address         String
+  city            String
+  state           String
+  zip             String
+  propertyType    String    // Office, Retail, Industrial, Multifamily
+  sizeSqFt        Int?
+  yearBuilt       Int?
+  class           String?   // Class A, Class B, Class C
+  ownerId         String?   // Could link to a Contact or separate Owner model
+  metadata        Json?
+  listings        Listing[]
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([propertyType])
+  @@index([state, city])
+}
+
+model Listing {
+  id              String    @id @default(cuid())
+  propertyId      String
+  property        Property  @relation(fields: [propertyId], references: [id])
+  brokerId        String?
+  broker          Broker?   @relation(fields: [brokerId], references: [id])
+  type            String    // For Sale, For Lease
+  askingPrice     Float?
+  pricePerSqFt    Float?
+  leaseType       String?   // NNN, Gross, Modified Gross
+  capRate         Float?
+  status          String    @default("active")
+  description     String?
+  availableSqFt   Int?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([propertyId])
+  @@index([status])
+  @@index([type])
+}
+
+model Broker {
+  id              String    @id @default(cuid())
+  contactId       String    @unique
+  contact         Contact   @relation(fields: [contactId], references: [id])
+  firmName        String?
+  licenseNumber   String?
+  specialization  String?   // Tenant Rep, Landlord Rep, Investment Sales
+  tier            String?   // e.g. "boutique", "national"
+  listings        Listing[]
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model TenantApplication {
+  id              String    @id @default(cuid())
+  leadId          String    @unique
+  lead            Lead      @relation(fields: [leadId], references: [id])
+  businessName    String?
+  industry        String?
+  yearsInBusiness Int?
+  annualRevenue   Float?
+  creditScore     Int?
+  status          String    @default("pending") // pending, approved, rejected, loi_submitted
+  notes           String?
+  metadata        Json?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([status])
 }
