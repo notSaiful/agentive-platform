@@ -11,6 +11,17 @@ interface CreateCallParams {
   dynamicVariables?: Record<string, string>;
 }
 
+interface CreateWebCallParams {
+  agentId: string;
+  metadata?: Record<string, string>;
+  retellLlDynamicVariables?: Record<string, string>;
+}
+
+interface WebCallResult {
+  callId: string;
+  accessToken: string;
+}
+
 interface CallResult {
   callId: string;
   callStatus: string;
@@ -76,6 +87,28 @@ export class RetellClient {
       durationSeconds: data.end_timestamp && data.start_timestamp
         ? Math.round((data.end_timestamp - data.start_timestamp) / 1000)
         : undefined,
+    };
+  }
+
+  async createWebCall(params: CreateWebCallParams): Promise<WebCallResult> {
+    const response = await fetch(`${this.baseUrl}/create-web-call`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        agent_id: params.agentId,
+        metadata: params.metadata || {},
+        retell_llm_dynamic_variables: params.retellLlDynamicVariables || {},
+      }),
+    });
+
+    if (!response.ok) throw new Error(`Retell API error: ${response.status}`);
+    const data = await response.json() as any;
+    return {
+      callId: data.call_id,
+      accessToken: data.access_token,
     };
   }
 
