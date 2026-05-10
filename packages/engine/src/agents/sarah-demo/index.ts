@@ -1,6 +1,7 @@
 import { RetellClient } from '@agentive/integrations';
 import { runSarahOrchestrator, getQualificationData } from './orchestrator.js';
 import { prisma } from '../../db/client.js';
+import { DEFAULT_ORGANIZATION_ID } from '../../constants.js';
 
 interface StartDemoInput {
   visitorId: string;
@@ -60,6 +61,7 @@ export class SarahDemoAgent {
     try {
       await prisma.communicationEvent.create({
         data: {
+          organizationId: DEFAULT_ORGANIZATION_ID,
           leadId: sessionId,
           contactId: input.visitorId,
           channel: 'web-voice',
@@ -81,6 +83,7 @@ export class SarahDemoAgent {
       const call = await this.retell.getCall(callId);
       await prisma.communicationEvent.create({
         data: {
+          organizationId: DEFAULT_ORGANIZATION_ID,
           leadId: callId,
           contactId: '',
           channel: 'web-voice',

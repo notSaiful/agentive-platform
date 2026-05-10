@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { prisma } from '../db/client.js';
 import { globalEmitter } from '@agentive/shared';
+import { DEFAULT_ORGANIZATION_ID } from '../constants.js';
 
 export async function handleLeadWebhook(req: Request, res: Response): Promise<void> {
   const { source, firstName, lastName, email, phone, message } = req.body;
@@ -12,6 +13,7 @@ export async function handleLeadWebhook(req: Request, res: Response): Promise<vo
 
   const contact = await prisma.contact.create({
     data: {
+      organizationId: DEFAULT_ORGANIZATION_ID,
       firstName,
       lastName,
       email: email || null,
@@ -24,6 +26,7 @@ export async function handleLeadWebhook(req: Request, res: Response): Promise<vo
 
   const lead = await prisma.lead.create({
     data: {
+      organizationId: DEFAULT_ORGANIZATION_ID,
       source,
       sourceDetails: req.body.sourceDetails || {},
       contactId: contact.id,

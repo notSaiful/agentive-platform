@@ -1,5 +1,5 @@
 import twilio from 'twilio';
-import { COMPLIANCE } from '@agentive/shared';
+import { COMPLIANCE, CircuitBreaker } from '@agentive/shared';
 
 interface TwilioConfig {
   accountSid: string;
@@ -8,26 +8,72 @@ interface TwilioConfig {
   phoneNumber: string;
 }
 
+interface SmsLogEntry {
+  to: string;
+  body: string;
+  timestamp: Date;
+  status: string;
+  sid: string;
+}
+
 export class TwilioClient {
   private client: ReturnType<typeof twilio>;
   private phoneNumber: string;
+  private sendLog: Map<string, SmsLogEntry[]> = new Map();
+  private breaker: CircuitBreaker;
 
   constructor(config: TwilioConfig) {
     this.client = twilio(config.apiKeySid, config.apiKeySecret, {
       accountSid: config.accountSid,
     });
     this.phoneNumber = config.phoneNumber;
+    this.breaker = new CircuitBreaker('twilio', { failureThreshold: 5, resetTimeoutMs: 30000 });
   }
 
-  async sendSms(to: string, body: string): Promise<{ sid: string; status: string }> {
-    const message = await this.client.messages.create({
-      body,
-      from: this.phoneNumber,
-      to,
+  /**
+   * Send an SMS with circuit breaker, retries, rate limiting, and delivery tracking.
+   */
+  async sendSms(to: string, body: string, retries = 3): Promise<{ sid: string; status: string }> {
+    return this.breaker.execute(async () => {
+      // Rate limit check: max 5 messages per contact per day
+      const dailyCount = this.getDailyCount(to);
+      if (dailyCount >= 5) {
+        throw new Error(`Rate limit exceeded for ${to}: ${dailyCount} messages today`);
+      }
+
+      for (let attempt = 1; attempt <= retries; attempt++) {
+        try {
+          const message = await this.client.messages.create({
+            body,
+            from: this.phoneNumber,
+            to,
+            statusCallback: process.env.TWILIO_STATUS_CALLBACK_URL,
+          });
+
+          // Log the send
+          this.logSend(to, body, message.sid, message.status);
+
+          return { sid: message.sid, status: message.status };
+        } catch (err) {
+          const error = err as Error;
+          console.error(`Twilio SMS attempt ${attempt} failed:`, error.message);
+
+          if (attempt === retries) {
+            throw new Error(`Twilio SMS failed after ${retries} attempts: ${error.message}`);
+          }
+
+          // Exponential backoff: 1s, 2s, 4s
+          await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 1000));
+        }
+      }
+
+      throw new Error('Twilio SMS failed: unreachable');
     });
-    return { sid: message.sid, status: message.status };
   }
 
+  /**
+   * Check if we can send SMS now (quiet hours + consent implied by caller).
+   */
   canSendNow(timezone: string): boolean {
     const now = new Date();
     const localHour = parseInt(
@@ -36,5 +82,21 @@ export class TwilioClient {
     const { start, end } = COMPLIANCE.QUIET_HOURS;
     if (end <= start) return localHour >= end && localHour < start;
     return localHour >= end && localHour < start;
+  }
+
+  /**
+   * Get daily message count for a contact.
+   */
+  getDailyCount(phone: string): number {
+    const logs = this.sendLog.get(phone) ?? [];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return logs.filter((l) => l.timestamp >= today).length;
+  }
+
+  private logSend(to: string, body: string, sid: string, status: string): void {
+    const logs = this.sendLog.get(to) ?? [];
+    logs.push({ to, body, timestamp: new Date(), status, sid });
+    this.sendLog.set(to, logs);
   }
 }

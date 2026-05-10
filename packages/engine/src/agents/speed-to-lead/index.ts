@@ -6,6 +6,7 @@ import { routeLead } from '../../orchestrator/router.js';
 import { checkGuardrails } from '../../orchestrator/guardrails.js';
 import { prisma } from '../../db/client.js';
 import { globalEmitter } from '@agentive/shared';
+import { DEFAULT_ORGANIZATION_ID } from '../../constants.js';
 
 interface InboundLeadInput {
   leadId: string;
@@ -106,6 +107,7 @@ export class SpeedToLeadAgent {
 
         await prisma.communicationEvent.create({
           data: {
+            organizationId: DEFAULT_ORGANIZATION_ID,
             leadId: input.leadId,
             contactId: contact.id,
             channel: 'phone',
@@ -142,6 +144,7 @@ export class SpeedToLeadAgent {
 
     await prisma.message.create({
       data: {
+        organizationId: DEFAULT_ORGANIZATION_ID,
         conversationId: conversation.id,
         role: 'agent',
         channel: 'sms',
@@ -207,6 +210,7 @@ export class SpeedToLeadAgent {
 
     await prisma.message.create({
       data: {
+        organizationId: DEFAULT_ORGANIZATION_ID,
         conversationId: conversation.id,
         role: 'agent',
         channel: 'sms',
@@ -243,6 +247,7 @@ export class SpeedToLeadAgent {
 
     await prisma.message.create({
       data: {
+        organizationId: DEFAULT_ORGANIZATION_ID,
         conversationId: conversation.id,
         role: 'lead',
         channel: input.channel,
@@ -288,6 +293,7 @@ export class SpeedToLeadAgent {
 
     await prisma.message.create({
       data: {
+        organizationId: DEFAULT_ORGANIZATION_ID,
         conversationId: conversation.id,
         role: 'agent',
         channel: input.channel,
@@ -384,7 +390,7 @@ export class SpeedToLeadAgent {
     const existing = await prisma.conversation.findFirst({ where: { leadId } });
     if (existing) return existing;
     return prisma.conversation.create({
-      data: { leadId, contactId, status: 'active', agentId: 'speed-to-lead' },
+      data: { organizationId: DEFAULT_ORGANIZATION_ID, leadId, contactId, status: 'active', agentId: 'speed-to-lead' },
     });
   }
 }

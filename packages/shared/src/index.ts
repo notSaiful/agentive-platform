@@ -7,3 +7,4 @@ export * from './types/escalation.js';
 export * from './constants/index.js';
 export * from './events/emitter.js';
 export * from './utils/phrasing-filter.js';
+export * from './utils/circuit-breaker.js';

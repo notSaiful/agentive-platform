@@ -1,6 +1,7 @@
 import { SCORING } from '@agentive/shared';
 import { prisma } from '../db/client.js';
 import { globalEmitter } from '@agentive/shared';
+import { DEFAULT_ORGANIZATION_ID } from '../constants.js';
 
 interface EscalationCheck {
   confidence: number;
@@ -26,6 +27,7 @@ export async function createEscalation(params: {
 }): Promise<string> {
   const escalation = await prisma.escalation.create({
     data: {
+      organizationId: DEFAULT_ORGANIZATION_ID,
       leadId: params.leadId,
       conversationId: params.conversationId,
       reason: params.reason,

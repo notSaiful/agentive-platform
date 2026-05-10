@@ -1,6 +1,7 @@
 import { prisma } from '../db/client.js';
 import { CalClient } from '@agentive/integrations';
 import { globalEmitter } from '@agentive/shared';
+import { DEFAULT_ORGANIZATION_ID } from '../constants.js';
 
 export async function bookAppointment(params: {
   leadId: string;
@@ -38,6 +39,7 @@ export async function bookAppointment(params: {
 
   const appointment = await prisma.appointment.create({
     data: {
+      organizationId: DEFAULT_ORGANIZATION_ID,
       leadId: params.leadId,
       contactId: params.contactId,
       agentId: 'speed-to-lead',

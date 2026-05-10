@@ -7,30 +7,101 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model Organization {
+  id            String    @id @default(cuid())
+  name          String
+  slug          String    @unique
+  status        String    @default("active")
+  plan          String    @default("pilot")
+  settings      Json?
+  crmConfig     Json?
+  voiceConfig   Json?
+  emailConfig   Json?
+  quietHours    Json?     // { start: "21:00", end: "08:00", timezone: "America/New_York" }
+  teams         Team[]
+  users         User[]
+  contacts      Contact[]
+  leads         Lead[]
+  properties    Property[]
+  listings      Listing[]
+  brokers       Broker[]
+  appointments  Appointment[]
+  escalations   Escalation[]
+  nurtureCadences NurtureCadence[]
+  communicationEvents CommunicationEvent[]
+  tenantApplications TenantApplication[]
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([slug])
+  @@index([status])
+}
+
+model Team {
+  id             String        @id @default(cuid())
+  organizationId String
+  organization   Organization  @relation(fields: [organizationId], references: [id])
+  name           String
+  description    String?
+  users          User[]
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([organizationId])
+}
+
+model User {
+  id             String        @id @default(cuid())
+  organizationId String
+  organization   Organization  @relation(fields: [organizationId], references: [id])
+  teamId         String?
+  team           Team?         @relation(fields: [teamId], references: [id])
+  email          String
+  name           String
+  role           String        @default("agent") // admin, broker, agent, viewer
+  phone          String?
+  timezone       String        @default("America/New_York")
+  status         String        @default("active")
+  preferences    Json?
+  assignedLeads  Lead[]
+  assignedEscalations Escalation[]
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@unique([organizationId, email])
+  @@index([organizationId])
+  @@index([teamId])
+}
+
 model Contact {
-  id              String    @id @default(cuid())
+  id              String        @id @default(cuid())
+  organizationId  String
+  organization    Organization  @relation(fields: [organizationId], references: [id])
   firstName       String
   lastName        String
   email           String?
   phone           String?
-  smsConsent      Boolean   @default(false)
-  emailConsent    Boolean   @default(false)
-  preferredChannel String   @default("sms")
-  timezone        String    @default("America/New_York")
+  smsConsent      Boolean       @default(false)
+  emailConsent    Boolean       @default(false)
+  preferredChannel String       @default("sms")
+  timezone        String        @default("America/New_York")
   metadata        Json?
   leads           Lead[]
   conversations   Conversation[]
   appointments    Appointment[]
   broker          Broker?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
+  @@index([organizationId])
   @@index([phone])
   @@index([email])
 }
 
 model Lead {
   id               String          @id @default(cuid())
+  organizationId   String
+  organization     Organization    @relation(fields: [organizationId], references: [id])
   source           String
   sourceDetails    Json?
   contactId        String
@@ -39,14 +110,17 @@ model Lead {
   qualificationScore Int?
   classification   String?
   assignedAgentId  String?
+  assignedTo       User?           @relation(fields: [assignedAgentId], references: [id])
   conversations    Conversation[]
   appointments     Appointment[]
-  escalations     Escalation[]
-  tenantApp       TenantApplication?
+  escalations      Escalation[]
+  tenantApp        TenantApplication?
+  nurtureCadences  NurtureCadence[]
   firstResponseAt  DateTime?
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
 
+  @@index([organizationId])
   @@index([status])
   @@index([classification])
   @@index([createdAt])
@@ -54,23 +128,26 @@ model Lead {
 }
 
 model Conversation {
-  id          String     @id @default(cuid())
-  leadId      String
-  lead        Lead       @relation(fields: [leadId], references: [id])
-  contactId   String
-  contact     Contact    @relation(fields: [contactId], references: [id])
-  messages    Message[]
-  status      String     @default("active")
-  agentId     String     @default("speed-to-lead")
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  id             String     @id @default(cuid())
+  organizationId String
+  leadId         String
+  lead           Lead       @relation(fields: [leadId], references: [id])
+  contactId      String
+  contact        Contact    @relation(fields: [contactId], references: [id])
+  messages       Message[]
+  status         String     @default("active")
+  agentId        String     @default("speed-to-lead")
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
 
+  @@index([organizationId])
   @@index([leadId])
   @@index([status])
 }
 
 model Message {
   id             String       @id @default(cuid())
+  organizationId String
   conversationId String
   conversation   Conversation @relation(fields: [conversationId], references: [id])
   role           String
@@ -79,58 +156,69 @@ model Message {
   metadata       Json?
   timestamp      DateTime     @default(now())
 
+  @@index([organizationId])
   @@index([conversationId])
   @@index([timestamp])
 }
 
 model Appointment {
-  id               String    @id @default(cuid())
+  id               String        @id @default(cuid())
+  organizationId   String
+  organization     Organization  @relation(fields: [organizationId], references: [id])
   leadId           String
-  lead             Lead      @relation(fields: [leadId], references: [id])
+  lead             Lead          @relation(fields: [leadId], references: [id])
   contactId        String
-  contact          Contact   @relation(fields: [contactId], references: [id])
+  contact          Contact       @relation(fields: [contactId], references: [id])
   agentId          String
   scheduledAt      DateTime
-  durationMinutes  Int       @default(30)
-  type             String    @default("phone")
-  status           String    @default("scheduled")
+  durationMinutes  Int           @default(30)
+  type             String        @default("phone")
+  status           String        @default("scheduled")
   notes            String?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
 
+  @@index([organizationId])
   @@index([leadId])
   @@index([scheduledAt])
   @@index([status])
 }
 
 model Escalation {
-  id             String    @id @default(cuid())
+  id             String        @id @default(cuid())
+  organizationId String
+  organization   Organization  @relation(fields: [organizationId], references: [id])
   leadId         String
-  lead           Lead      @relation(fields: [leadId], references: [id])
+  lead           Lead          @relation(fields: [leadId], references: [id])
   conversationId String
   reason         String
-  status         String    @default("pending")
+  status         String        @default("pending")
   confidence     Float
   context        String
   assignedTo     String?
+  assignedUser   User?         @relation(fields: [assignedTo], references: [id])
   resolvedAt     DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
 
+  @@index([organizationId])
   @@index([status])
   @@index([leadId])
 }
 
 model CommunicationEvent {
-  id          String   @id @default(cuid())
-  leadId      String
-  contactId   String
-  channel     String
-  direction   String
-  content     String
-  metadata    Json?
-  timestamp   DateTime @default(now())
+  id             String        @id @default(cuid())
+  organizationId String
+  organization   Organization  @relation(fields: [organizationId], references: [id])
+  leadId         String
+  contactId      String
+  channel        String
+  direction      String
+  content        String
+  metadata       Json?
+  timestamp      DateTime      @default(now())
 
+  @@index([organizationId])
   @@index([leadId])
   @@index([timestamp])
 }
@@ -164,75 +252,110 @@ model Outcome {
 // ---------------------------------------------------------------------------
 
 model Property {
-  id              String    @id @default(cuid())
+  id              String        @id @default(cuid())
+  organizationId  String
+  organization    Organization  @relation(fields: [organizationId], references: [id])
   name            String?
   address         String
   city            String
   state           String
   zip             String
-  propertyType    String    // Office, Retail, Industrial, Multifamily
+  propertyType    String        // Office, Retail, Industrial, Multifamily
   sizeSqFt        Int?
   yearBuilt       Int?
-  class           String?   // Class A, Class B, Class C
-  ownerId         String?   // Could link to a Contact or separate Owner model
+  class           String?       // Class A, Class B, Class C
+  ownerId         String?       // Could link to a Contact or separate Owner model
   metadata        Json?
   listings        Listing[]
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
+  @@index([organizationId])
   @@index([propertyType])
   @@index([state, city])
 }
 
 model Listing {
-  id              String    @id @default(cuid())
+  id              String        @id @default(cuid())
+  organizationId  String
+  organization    Organization  @relation(fields: [organizationId], references: [id])
   propertyId      String
-  property        Property  @relation(fields: [propertyId], references: [id])
+  property        Property      @relation(fields: [propertyId], references: [id])
   brokerId        String?
-  broker          Broker?   @relation(fields: [brokerId], references: [id])
-  type            String    // For Sale, For Lease
+  broker          Broker?       @relation(fields: [brokerId], references: [id])
+  type            String        // For Sale, For Lease
   askingPrice     Float?
   pricePerSqFt    Float?
-  leaseType       String?   // NNN, Gross, Modified Gross
+  leaseType       String?       // NNN, Gross, Modified Gross
   capRate         Float?
-  status          String    @default("active")
+  status          String        @default("active")
   description     String?
   availableSqFt   Int?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
+  @@index([organizationId])
   @@index([propertyId])
   @@index([status])
   @@index([type])
 }
 
 model Broker {
-  id              String    @id @default(cuid())
-  contactId       String    @unique
-  contact         Contact   @relation(fields: [contactId], references: [id])
+  id              String        @id @default(cuid())
+  organizationId  String
+  organization    Organization  @relation(fields: [organizationId], references: [id])
+  contactId       String        @unique
+  contact         Contact       @relation(fields: [contactId], references: [id])
   firmName        String?
   licenseNumber   String?
-  specialization  String?   // Tenant Rep, Landlord Rep, Investment Sales
-  tier            String?   // e.g. "boutique", "national"
+  specialization  String?       // Tenant Rep, Landlord Rep, Investment Sales
+  tier            String?       // e.g. "boutique", "national"
   listings        Listing[]
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([organizationId])
 }
 
 model TenantApplication {
-  id              String    @id @default(cuid())
-  leadId          String    @unique
-  lead            Lead      @relation(fields: [leadId], references: [id])
+  id              String        @id @default(cuid())
+  organizationId  String
+  organization    Organization  @relation(fields: [organizationId], references: [id])
+  leadId          String        @unique
+  lead            Lead          @relation(fields: [leadId], references: [id])
   businessName    String?
   industry        String?
   yearsInBusiness Int?
   annualRevenue   Float?
   creditScore     Int?
-  status          String    @default("pending") // pending, approved, rejected, loi_submitted
+  status          String        @default("pending") // pending, approved, rejected, loi_submitted
   notes           String?
   metadata        Json?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
+  @@index([organizationId])
   @@index([status])
+}
+
+model NurtureCadence {
+  id             String        @id @default(cuid())
+  organizationId String
+  organization   Organization  @relation(fields: [organizationId], references: [id])
+  leadId         String
+  lead           Lead          @relation(fields: [leadId], references: [id])
+  stage          String        // day_3, day_7, day_14, day_30, day_60, day_90, monthly
+  channel        String        // sms, email, voice
+  template       String        // reference to template key
+  scheduledAt    DateTime
+  sentAt         DateTime?
+  status         String        @default("scheduled") // scheduled, sent, failed, skipped
+  metadata       Json?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([organizationId])
+  @@index([leadId])
+  @@index([status])
+  @@index([scheduledAt])
 }

@@ -1,6 +1,7 @@
 import { prisma } from '../db/client.js';
 import { scoreLead } from '../agents/speed-to-lead/scorer.js';
 import { routeLead } from '../orchestrator/router.js';
+import { DEFAULT_ORGANIZATION_ID } from '../constants.js';
 
 interface CallEndedInput {
   callId: string;
@@ -33,6 +34,7 @@ export async function handleRetellCallEnded(input: CallEndedInput): Promise<Call
 
   await prisma.communicationEvent.create({
     data: {
+      organizationId: DEFAULT_ORGANIZATION_ID,
       leadId: input.leadId,
       contactId: '',
       channel: 'phone',
