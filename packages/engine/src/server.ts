@@ -92,6 +92,16 @@ app.use('/api/vapi', vapiDemoRoutes);
 
 app.get('/health', (_req, res) => res.json({ status: 'ok', agent: 'speed-to-lead' }));
 
+app.get('/', (_req, res) => {
+  res.json({
+    name: 'Agentive Engine',
+    status: 'running',
+    services: ['speed-to-lead', 'sarah-demo'],
+    endpoints: ['/health', '/api/vapi/health', '/api/demo', '/webhooks/leads', '/webhooks/sms/inbound'],
+    website: 'https://agentive-website-ten.vercel.app',
+  });
+});
+
 // API endpoints for dashboard
 app.get('/api/leads', async (req, res) => {
   const { status, classification } = req.query;
