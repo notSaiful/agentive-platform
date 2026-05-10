@@ -5,7 +5,7 @@ import { COMPLIANCE, globalEmitter } from '@agentive/shared';
 export async function handleInboundSms(req: Request, res: Response): Promise<void> {
   const { From, Body, MessageSid } = req.body;
 
-  const isOptOut = COMPLIANCE.OPT_OUT_KEYWORDS.some(kw => Body?.toUpperCase().trim() === kw);
+  const isOptOut = COMPLIANCE.OPT_OUT_KEYWORDS.some((kw: string) => Body?.toUpperCase().trim() === kw);
 
   res.type('text/xml').send('<Response></Response>');
 

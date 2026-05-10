@@ -3,8 +3,10 @@ import dotenv from 'dotenv';
 import { handleLeadWebhook } from './ingest/lead-webhook.js';
 import { handleInboundSms } from './ingest/sms-webhook.js';
 import { handleRetellCallEnded } from './ingest/retell-webhook.js';
-import { globalEmitter } from '@agentive/shared';
+import { globalEmitter, AgentEvent } from '@agentive/shared';
 import { SpeedToLeadAgent } from './agents/speed-to-lead/index.js';
+import demoRoutes from './routes/demo.js';
+import vapiDemoRoutes from './routes/vapi-demo.js';
 import { calculateKPIs } from './analytics/kpi-tracker.js';
 import { prisma } from './db/client.js';
 
@@ -16,7 +18,7 @@ app.use(express.json());
 
 const agent = new SpeedToLeadAgent();
 
-globalEmitter.on('lead.created', async (event) => {
+globalEmitter.on('lead.created', async (event: AgentEvent) => {
   const { leadId, contactId, source, message } = event.payload as Record<string, string>;
   try {
     await agent.processInboundLead({ leadId, contactId, source, message, channel: 'phone' });
@@ -25,7 +27,7 @@ globalEmitter.on('lead.created', async (event) => {
   }
 });
 
-globalEmitter.on('message.inbound', async (event) => {
+globalEmitter.on('message.inbound', async (event: AgentEvent) => {
   const { leadId, content, channel } = event.payload as Record<string, string>;
   try {
     await agent.processLeadReply({ leadId, message: content, channel });
@@ -85,6 +87,9 @@ app.post('/webhooks/retell/call-ended', async (req, res) => {
 });
 
 // Health check
+app.use('/api/demo', demoRoutes);
+app.use('/api/vapi', vapiDemoRoutes);
+
 app.get('/health', (_req, res) => res.json({ status: 'ok', agent: 'speed-to-lead' }));
 
 // API endpoints for dashboard

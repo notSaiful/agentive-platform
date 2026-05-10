@@ -1,0 +1,17 @@
+node_modules
+*.log
+.DS_Store
+.git
+.gitignore
+.env
+.env.local
+.env.*.local
+coverage
+.turbo
+.vscode
+.idea
+packages/dashboard
+packages/*/dist
+packages/*/.next
+packages/*/tsconfig.tsbuildinfo
+render.yaml

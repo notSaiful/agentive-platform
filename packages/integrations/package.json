@@ -8,6 +8,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@agentive/shared": "*",
     "openai": "^4.73.0",
     "twilio": "^5.4.0"
   },

@@ -250,7 +250,7 @@ export class SpeedToLeadAgent {
       },
     });
 
-    const history = conversation.messages.map(m => ({
+    const history = conversation.messages.map((m: { role: string; content: string }) => ({
       role: (m.role === 'agent' ? 'assistant' : 'user') as 'user' | 'assistant',
       content: m.content,
     }));
@@ -263,7 +263,7 @@ export class SpeedToLeadAgent {
       .replace('{qualification_data}', JSON.stringify(qualificationData))
       .replace('{remaining_fields}', remainingFields.join(', '));
 
-    const recentMessages = history.slice(-4).map(m => ({
+    const recentMessages = history.slice(-4).map((m: { role: 'user' | 'assistant'; content: string }) => ({
       role: m.role,
       content: m.content,
     }));
