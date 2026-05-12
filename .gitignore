@@ -6,3 +6,4 @@ dist/
 .turbo/
 packages/*/.next/
 packages/*/tsconfig.tsbuildinfo
+dump.rdb
