@@ -2,16 +2,9 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import { UnifiedAgent } from './agents/unified/index.js';
-import { createWorkers } from './queue/processors.js';
+import { createQueueConnection, createWorkers } from './queue/processors.js';
 
-const redisHost = process.env.REDIS_URL
-  ? new URL(process.env.REDIS_URL).hostname
-  : 'localhost';
-const redisPort = process.env.REDIS_URL
-  ? parseInt(new URL(process.env.REDIS_URL).port || '6379')
-  : 6379;
-
-const connection = { host: redisHost, port: redisPort };
+const connection = createQueueConnection();
 
 const agent = new UnifiedAgent();
 

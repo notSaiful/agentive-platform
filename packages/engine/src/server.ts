@@ -5,7 +5,7 @@ import { handleInboundSms } from './ingest/sms-webhook.js';
 import { handleRetellCallEnded } from './ingest/retell-webhook.js';
 import { globalEmitter, AgentEvent } from '@agentive/shared';
 import { UnifiedAgent } from './agents/unified/index.js';
-import { createQueues, createWorkers, QueueConnection } from './queue/processors.js';
+import { createQueueConnection, createQueues, createWorkers } from './queue/processors.js';
 import { JOB_TYPES, LEAD_PROCESS_QUEUE, NURTURE_QUEUE } from './queue/jobs.js';
 import demoRoutes from './routes/demo.js';
 import vapiDemoRoutes from './routes/vapi-demo.js';
@@ -19,14 +19,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
 // Queue setup
-const redisHost = process.env.REDIS_URL
-  ? new URL(process.env.REDIS_URL).hostname
-  : 'localhost';
-const redisPort = process.env.REDIS_URL
-  ? parseInt(new URL(process.env.REDIS_URL).port || '6379')
-  : 6379;
-
-const connection: QueueConnection = { host: redisHost, port: redisPort };
+const connection = createQueueConnection();
 const { leadQueue, nurtureQueue } = createQueues(connection);
 
 // Start workers inline (same process for now, can split later)

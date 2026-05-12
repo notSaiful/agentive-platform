@@ -9,7 +9,7 @@ import { UNIFIED_AGENT_SYSTEM_PROMPT, QUALIFICATION_STARTER_PROMPT } from './pro
 import { FollowUpNurtureAgent } from '../follow-up-nurture/index.js';
 import { checkGuardrails } from '../../orchestrator/guardrails.js';
 import { globalEmitter } from '@agentive/shared';
-import { startTrace, endTrace } from '../sarah-demo/tracer.js';
+import { createTraceRunId, startTrace, endTrace } from '../sarah-demo/tracer.js';
 import { TwilioClient, VapiClient } from '@agentive/integrations';
 
 interface InboundLeadInput {
@@ -84,7 +84,7 @@ export class UnifiedAgent {
   }
 
   async processInboundLead(input: InboundLeadInput): Promise<AgentResult> {
-    const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const runId = createTraceRunId();
 
     await startTrace({
       runId,
@@ -226,7 +226,7 @@ export class UnifiedAgent {
   }
 
   async processLeadReply(input: LeadReplyInput): Promise<AgentResult> {
-    const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const runId = createTraceRunId();
 
     await startTrace({
       runId,

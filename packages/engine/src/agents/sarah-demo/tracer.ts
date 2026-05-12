@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Client } from 'langsmith';
 
 const client = new Client({
@@ -19,6 +20,10 @@ interface TraceRunOutput {
   runId: string;
   outputs?: Record<string, unknown>;
   error?: string;
+}
+
+export function createTraceRunId(): string {
+  return randomUUID();
 }
 
 /**
@@ -72,7 +77,7 @@ export async function traceToolExecution<T>(
   sessionId: string,
   fn: () => Promise<T>
 ): Promise<T> {
-  const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const runId = createTraceRunId();
 
   await startTrace({
     runId,
@@ -107,7 +112,7 @@ export async function traceOrchestrator<T>(
   messageCount: number,
   fn: () => Promise<T>
 ): Promise<T> {
-  const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const runId = createTraceRunId();
 
   await startTrace({
     runId,
@@ -142,7 +147,7 @@ export async function traceVapiWebhook<T>(
   sessionId: string | undefined,
   fn: () => Promise<T>
 ): Promise<T> {
-  const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const runId = createTraceRunId();
 
   await startTrace({
     runId,
