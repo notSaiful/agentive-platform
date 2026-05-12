@@ -37,7 +37,7 @@ export async function handleLeadWebhook(req: Request, res: Response): Promise<vo
   globalEmitter.emit({
     id: `evt_${Date.now()}`,
     type: 'lead.created' as const,
-    payload: { leadId: lead.id, contactId: contact.id, source, message },
+    payload: { leadId: lead.id, contactId: contact.id, source, message, preferredChannel: contact.preferredChannel },
     timestamp: new Date(),
     source: 'webhook' as const,
   });

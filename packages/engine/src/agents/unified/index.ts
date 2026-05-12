@@ -10,7 +10,7 @@ import { FollowUpNurtureAgent } from '../follow-up-nurture/index.js';
 import { checkGuardrails } from '../../orchestrator/guardrails.js';
 import { globalEmitter } from '@agentive/shared';
 import { createTraceRunId, startTrace, endTrace } from '../sarah-demo/tracer.js';
-import { TwilioClient, VapiClient } from '@agentive/integrations';
+import { TwilioClient, VapiClient, ResendClient } from '@agentive/integrations';
 
 interface InboundLeadInput {
   leadId: string;
@@ -39,6 +39,7 @@ export class UnifiedAgent {
   private executor: AgentExecutor;
   private twilio: TwilioClient;
   private vapi: VapiClient;
+  private resend: ResendClient;
 
   constructor() {
     const model = new ChatOpenAI({
@@ -81,6 +82,11 @@ export class UnifiedAgent {
     this.vapi = new VapiClient({
       apiKey: process.env.VAPI_API_KEY ?? '',
     });
+
+    this.resend = new ResendClient({
+      apiKey: process.env.RESEND_API_KEY ?? '',
+      fromEmail: process.env.RESEND_FROM_EMAIL ?? 'Agentive <team@agentive.ai>',
+    });
   }
 
   async processInboundLead(input: InboundLeadInput): Promise<AgentResult> {
@@ -104,7 +110,7 @@ export class UnifiedAgent {
       const guardrailResult = checkGuardrails({
         channel: input.channel,
         localHour: new Date().getHours(),
-        hasConsent: input.channel === 'sms' ? contact.smsConsent : contact.emailConsent,
+        hasConsent: input.channel === 'email' ? contact.emailConsent : contact.smsConsent,
       });
 
       if (!guardrailResult.allowed) {
@@ -187,13 +193,22 @@ export class UnifiedAgent {
         data: { status: 'contacted', firstResponseAt: new Date() },
       });
 
-      // Send SMS if channel is SMS (or phone fallback)
-      if (contact.phone && this.twilio.canSendNow(contact.timezone)) {
+      // Send via correct channel (phone channel here means VAPI failed — fallback to SMS)
+      if ((input.channel === 'sms' || input.channel === 'phone') && contact.phone && contact.smsConsent && this.twilio.canSendNow(contact.timezone)) {
         try {
           await this.twilio.sendSms(contact.phone, responseText);
         } catch (err) {
           console.error('SMS send failed:', err);
-          // Don't crash — the message is already saved and the agent response is valid
+        }
+      } else if (input.channel === 'email' && contact.email && contact.emailConsent) {
+        try {
+          await this.resend.sendEmail({
+            to: contact.email,
+            subject: 'Following up on your inquiry',
+            text: responseText,
+          });
+        } catch (err) {
+          console.error('Email send failed:', err);
         }
       }
 
@@ -209,7 +224,17 @@ export class UnifiedAgent {
       // Check if agent routed the lead
       const routeMatch = responseText.match(/ROUTE:\s*(\d+|disqualify)/i);
       if (routeMatch) {
-        return this.handleRouteFromAgent(input.leadId, routeMatch[1], contact.id);
+        const result = await this.handleRouteFromAgent(input.leadId, routeMatch[1], contact.id);
+        await endTrace({ runId, outputs: { ...result, status: 'routed' } });
+        return result;
+      }
+
+      // No route on first contact — schedule nurture so lead isn't forgotten
+      try {
+        const { scheduleNurtureTool } = await import('./tools.js');
+        await scheduleNurtureTool.invoke({ leadId: input.leadId });
+      } catch (err) {
+        console.error('Nurture scheduling failed:', err);
       }
 
       await endTrace({ runId, outputs: { responseText, status: 'contacted' } });
@@ -284,12 +309,22 @@ export class UnifiedAgent {
         },
       });
 
-      // Send SMS if applicable
-      if (input.channel === 'sms' && lead.contact.phone && this.twilio.canSendNow(lead.contact.timezone)) {
+      // Send via correct channel
+      if (input.channel === 'sms' && lead.contact.phone && lead.contact.smsConsent && this.twilio.canSendNow(lead.contact.timezone)) {
         try {
           await this.twilio.sendSms(lead.contact.phone, responseText);
         } catch (err) {
           console.error('SMS send failed:', err);
+        }
+      } else if (input.channel === 'email' && lead.contact.email && lead.contact.emailConsent) {
+        try {
+          await this.resend.sendEmail({
+            to: lead.contact.email,
+            subject: 'Re: Following up on your inquiry',
+            text: responseText,
+          });
+        } catch (err) {
+          console.error('Email send failed:', err);
         }
       }
 
@@ -303,8 +338,13 @@ export class UnifiedAgent {
 
       // Check for ROUTE directive
       const routeMatch = responseText.match(/ROUTE:\s*(\d+|disqualify)/i);
-      if (routeMatch) {
-        return this.handleRouteFromAgent(input.leadId, routeMatch[1], lead.contact.id);
+      const maxMessagesReached = conversation.messages.length >= 5;
+
+      if (routeMatch || maxMessagesReached) {
+        const routeValue = routeMatch ? routeMatch[1] : '50';
+        const result = await this.handleRouteFromAgent(input.leadId, routeValue, lead.contact.id);
+        await endTrace({ runId, outputs: { ...result, status: 'routed' } });
+        return result;
       }
 
       await endTrace({ runId, outputs: { responseText, status: lead.status } });

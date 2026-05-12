@@ -54,12 +54,16 @@ export class FollowUpNurtureAgent {
     const lastTouchAt = lastCadence?.sentAt ?? lead.createdAt;
     const scheduledAt = calculateNextTouchDate(lastTouchAt, nextRule);
 
+    const preferredChannel = nextRule.channels.find((c) =>
+      c === 'sms' ? lead.contact.phone : c === 'email' ? lead.contact.email : false
+    ) ?? nextRule.channels[0];
+
     await prisma.nurtureCadence.create({
       data: {
         organizationId: orgId,
         leadId,
         stage: nextRule.stage,
-        channel: nextRule.channels[0],
+        channel: preferredChannel,
         template: nextRule.template,
         scheduledAt,
         status: 'scheduled',

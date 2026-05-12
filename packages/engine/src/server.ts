@@ -53,14 +53,14 @@ scheduleNurtureJobs();
 
 // Event bus → queue bridge
 globalEmitter.on('lead.created', async (event: AgentEvent) => {
-  const { leadId, contactId, source, message } = event.payload as Record<string, string>;
+  const { leadId, contactId, source, message, preferredChannel } = event.payload as Record<string, string>;
   try {
     await leadQueue.add(JOB_TYPES.INGEST_LEAD, {
       leadId,
       contactId,
       source,
       message,
-      channel: 'phone',
+      channel: preferredChannel || 'sms',
     });
   } catch (err) {
     console.error('Error queuing lead ingest:', err);
