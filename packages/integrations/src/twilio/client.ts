@@ -35,10 +35,15 @@ export class TwilioClient {
    */
   async sendSms(to: string, body: string, retries = 3): Promise<{ sid: string; status: string }> {
     return this.breaker.execute(async () => {
-      // Rate limit check: max 5 messages per contact per day
+      // Rate limit checks
       const dailyCount = this.getDailyCount(to);
-      if (dailyCount >= 5) {
-        throw new Error(`Rate limit exceeded for ${to}: ${dailyCount} messages today`);
+      if (dailyCount >= COMPLIANCE.MAX_MESSAGES_PER_DAY) {
+        throw new Error(`Rate limit exceeded for ${to}: ${dailyCount} messages today (max ${COMPLIANCE.MAX_MESSAGES_PER_DAY})`);
+      }
+
+      const weeklyCount = this.getWeeklyCount(to);
+      if (weeklyCount >= COMPLIANCE.MAX_MESSAGES_PER_WEEK) {
+        throw new Error(`Rate limit exceeded for ${to}: ${weeklyCount} messages this week (max ${COMPLIANCE.MAX_MESSAGES_PER_WEEK})`);
       }
 
       for (let attempt = 1; attempt <= retries; attempt++) {
@@ -92,6 +97,17 @@ export class TwilioClient {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     return logs.filter((l) => l.timestamp >= today).length;
+  }
+
+  /**
+   * Get weekly message count for a contact.
+   */
+  getWeeklyCount(phone: string): number {
+    const logs = this.sendLog.get(phone) ?? [];
+    const weekAgo = new Date();
+    weekAgo.setDate(weekAgo.getDate() - 7);
+    weekAgo.setHours(0, 0, 0, 0);
+    return logs.filter((l) => l.timestamp >= weekAgo).length;
   }
 
   private logSend(to: string, body: string, sid: string, status: string): void {

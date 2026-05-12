@@ -28,6 +28,7 @@ export const DEFAULT_CADENCE: CadenceRule[] = [
 export function getNextStage(currentStage?: NurtureStage): CadenceRule | null {
   if (!currentStage) return DEFAULT_CADENCE[0];
   const idx = DEFAULT_CADENCE.findIndex((r) => r.stage === currentStage);
+  if (idx === -1) return null;
   return DEFAULT_CADENCE[idx + 1] ?? null;
 }
 

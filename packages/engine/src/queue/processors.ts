@@ -26,9 +26,16 @@ export function createQueueConnection(redisUrl = process.env.REDIS_URL): Connect
 }
 
 export function createQueues(connection: ConnectionOptions) {
+  const defaultJobOptions = {
+    attempts: 3,
+    backoff: { type: 'exponential' as const, delay: 2000 },
+    removeOnComplete: { count: 100 },
+    removeOnFail: { count: 50 },
+  };
+
   return {
-    leadQueue: new Queue(LEAD_PROCESS_QUEUE, { connection }),
-    nurtureQueue: new Queue(NURTURE_QUEUE, { connection }),
+    leadQueue: new Queue(LEAD_PROCESS_QUEUE, { connection, defaultJobOptions }),
+    nurtureQueue: new Queue(NURTURE_QUEUE, { connection, defaultJobOptions }),
   };
 }
 
@@ -78,7 +85,11 @@ export function createWorkers(
           throw new Error(`No handler for job type: ${job.name}`);
       }
     },
-    { connection },
+    {
+      connection,
+      concurrency: 5,
+      limiter: { max: 10, duration: 1000 },
+    },
   );
 
   const nurtureWorker = new Worker(
@@ -108,7 +119,11 @@ export function createWorkers(
           throw new Error(`No handler for nurture job type: ${job.name}`);
       }
     },
-    { connection },
+    {
+      connection,
+      concurrency: 3,
+      limiter: { max: 5, duration: 1000 },
+    },
   );
 
   leadWorker.on('completed', (job) => {

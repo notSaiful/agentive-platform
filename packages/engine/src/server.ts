@@ -11,6 +11,7 @@ import demoRoutes from './routes/demo.js';
 import vapiDemoRoutes from './routes/vapi-demo.js';
 import { calculateKPIs } from './analytics/kpi-tracker.js';
 import { prisma } from './db/client.js';
+import { DEFAULT_ORGANIZATION_ID } from './constants.js';
 
 dotenv.config();
 
@@ -25,6 +26,30 @@ const { leadQueue, nurtureQueue } = createQueues(connection);
 // Start workers inline (same process for now, can split later)
 const agent = new UnifiedAgent();
 const { leadWorker, nurtureWorker } = createWorkers(connection, agent);
+
+// ── Automated Nurture Scheduler ───────────────────────────────────────────────
+// Schedule daily nurture health check at 9:00 AM UTC
+async function scheduleNurtureJobs() {
+  try {
+    // Remove any existing repeatable jobs to avoid duplicates on restart
+    const repeatableJobs = await nurtureQueue.getRepeatableJobs();
+    for (const job of repeatableJobs) {
+      await nurtureQueue.removeRepeatableByKey(job.key);
+    }
+
+    await nurtureQueue.add(
+      JOB_TYPES.RUN_NURTURE_CAMPAIGN,
+      { organizationId: DEFAULT_ORGANIZATION_ID, campaignType: 'daily-health-check' },
+      { repeat: { pattern: '0 9 * * *' }, jobId: 'nurture-daily-health-check' }
+    );
+
+    console.log('[Scheduler] Daily nurture health check scheduled for 9:00 AM UTC');
+  } catch (err) {
+    console.error('[Scheduler] Failed to schedule nurture jobs:', err);
+  }
+}
+
+scheduleNurtureJobs();
 
 // Event bus → queue bridge
 globalEmitter.on('lead.created', async (event: AgentEvent) => {
@@ -111,14 +136,38 @@ app.post('/webhooks/retell/call-ended', async (req, res) => {
 app.use('/api/demo', demoRoutes);
 app.use('/api/vapi', vapiDemoRoutes);
 
-app.get('/health', (_req, res) => res.json({
-  status: 'ok',
-  agent: 'unified',
-  queues: {
-    lead: LEAD_PROCESS_QUEUE,
-    nurture: NURTURE_QUEUE,
-  },
-}));
+app.get('/health', async (_req, res) => {
+  const checks: Record<string, { ok: boolean; error?: string }> = {};
+
+  // DB check
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    checks.database = { ok: true };
+  } catch (err) {
+    checks.database = { ok: false, error: (err as Error).message };
+  }
+
+  // Redis check
+  try {
+    const redisClient = await leadQueue.client;
+    const redisHealth = await redisClient.ping();
+    checks.redis = { ok: redisHealth === 'PONG' };
+  } catch (err) {
+    checks.redis = { ok: false, error: (err as Error).message };
+  }
+
+  const allOk = Object.values(checks).every((c) => c.ok);
+
+  res.status(allOk ? 200 : 503).json({
+    status: allOk ? 'ok' : 'degraded',
+    agent: 'unified',
+    queues: {
+      lead: LEAD_PROCESS_QUEUE,
+      nurture: NURTURE_QUEUE,
+    },
+    checks,
+  });
+});
 
 app.get('/', (_req, res) => {
   res.json({
