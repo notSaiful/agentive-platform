@@ -1,0 +1,30 @@
+const API_BASE = process.env.NEXT_PUBLIC_ENGINE_URL || 'https://agentive-engine.fly.dev';
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || '';
+
+async function fetchApi(path: string, options: RequestInit = {}) {
+  const url = `${API_BASE}${path}`;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(API_KEY ? { 'x-api-key': API_KEY } : {}),
+    ...((options.headers as Record<string, string>) || {}),
+  };
+
+  const res = await fetch(url, { ...options, headers });
+  if (!res.ok) {
+    const err = await res.text().catch(() => 'Unknown error');
+    throw new Error(`API ${res.status}: ${err}`);
+  }
+  return res.json();
+}
+
+export const api = {
+  getLeads: (params?: { status?: string; classification?: string }) =>
+    fetchApi(`/api/leads?${new URLSearchParams(params || {}).toString()}`),
+  getMetrics: () => fetchApi('/api/metrics'),
+  getEscalations: () => fetchApi('/api/escalations'),
+  getAppointments: () => fetchApi('/api/appointments'),
+  getNurtureCadences: (params?: { status?: string }) =>
+    fetchApi(`/api/nurture/cadences?${new URLSearchParams(params || {}).toString()}`),
+  getAlerts: () => fetchApi('/api/alerts'),
+  getKpis: () => fetchApi('/api/kpis'),
+};
