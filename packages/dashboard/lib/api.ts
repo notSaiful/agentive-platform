@@ -20,6 +20,9 @@ async function fetchApi(path: string, options: RequestInit = {}) {
 export const api = {
   getLeads: (params?: { status?: string; classification?: string }) =>
     fetchApi(`/api/leads?${new URLSearchParams(params || {}).toString()}`),
+  getLeadConversations: (leadId: string) => fetchApi(`/api/leads/${leadId}/conversations`),
+  sendMessage: (body: { leadId: string; contactId: string; channel: string; content: string }) =>
+    fetchApi('/api/messages/send', { method: 'POST', body: JSON.stringify(body) }),
   getMetrics: () => fetchApi('/api/metrics'),
   getEscalations: () => fetchApi('/api/escalations'),
   getAppointments: () => fetchApi('/api/appointments'),

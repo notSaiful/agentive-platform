@@ -16,6 +16,7 @@ import { initSentry, Sentry } from './monitoring/sentry.js';
 import { logger } from './monitoring/logger.js';
 import { getSystemMetrics } from './monitoring/metrics.js';
 import { alertManager } from './monitoring/alerts.js';
+import { TwilioClient, ResendClient } from '@agentive/integrations';
 
 dotenv.config();
 initSentry();
@@ -330,6 +331,119 @@ app.get('/api/leads', async (req, res) => {
   if (classification) where.classification = classification as string;
   const leads = await prisma.lead.findMany({ where, include: { contact: true }, orderBy: { createdAt: 'desc' } });
   res.json(leads);
+});
+
+// ── Broker Reply API ────────────────────────────────────────────────────────
+app.get('/api/leads/:id/conversations', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const conversations = await prisma.conversation.findMany({
+      where: { leadId: id },
+      include: {
+        messages: { orderBy: { timestamp: 'asc' } },
+        lead: { include: { contact: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    res.json(conversations);
+  } catch (err) {
+    logger.error('Failed to fetch conversations', { error: (err as Error).message, leadId: id });
+    res.status(500).json({ error: 'Failed to fetch conversations' });
+  }
+});
+
+app.post('/api/messages/send', async (req, res) => {
+  const { leadId, contactId, channel, content } = req.body;
+  if (!leadId || !contactId || !channel || !content) {
+    res.status(400).json({ error: 'leadId, contactId, channel, content required' });
+    return;
+  }
+
+  try {
+    const contact = await prisma.contact.findUnique({ where: { id: contactId } });
+    if (!contact) {
+      res.status(404).json({ error: 'Contact not found' });
+      return;
+    }
+
+    const conversation = await prisma.conversation.findFirst({ where: { leadId } });
+    if (!conversation) {
+      res.status(404).json({ error: 'No conversation found for this lead' });
+      return;
+    }
+
+    // Send via correct channel
+    let sent = false;
+    if (channel === 'sms' && contact.phone && contact.smsConsent) {
+      const twilio = new TwilioClient({
+        accountSid: process.env.TWILIO_ACCOUNT_SID ?? '',
+        apiKeySid: process.env.TWILIO_API_KEY_SID ?? '',
+        apiKeySecret: process.env.TWILIO_API_KEY_SECRET ?? '',
+        phoneNumber: process.env.TWILIO_PHONE_NUMBER ?? '',
+      });
+      if (twilio.canSendNow(contact.timezone)) {
+        const result = await twilio.sendSms(contact.phone, content);
+        await prisma.communicationEvent.create({
+          data: {
+            organizationId: DEFAULT_ORGANIZATION_ID,
+            leadId,
+            contactId,
+            channel: 'sms',
+            direction: 'outbound',
+            content,
+            metadata: { twilioSid: result.sid, source: 'broker_dashboard' },
+          },
+        });
+        sent = true;
+      }
+    } else if (channel === 'email' && contact.email && contact.emailConsent) {
+      const resend = new ResendClient({
+        apiKey: process.env.RESEND_API_KEY ?? '',
+        fromEmail: process.env.RESEND_FROM_EMAIL ?? 'Agentive <team@agentive.ai>',
+      });
+      const result = await resend.sendEmail({
+        to: contact.email,
+        subject: 'Re: Your inquiry',
+        text: content,
+      });
+      await prisma.communicationEvent.create({
+        data: {
+          organizationId: DEFAULT_ORGANIZATION_ID,
+          leadId,
+          contactId,
+          channel: 'email',
+          direction: 'outbound',
+          content,
+          metadata: { resendId: result.id, source: 'broker_dashboard' },
+        },
+      });
+      sent = true;
+    }
+
+    // Save message to conversation
+    const message = await prisma.message.create({
+      data: {
+        organizationId: DEFAULT_ORGANIZATION_ID,
+        conversationId: conversation.id,
+        role: 'agent',
+        channel,
+        content,
+      },
+    });
+
+    globalEmitter.emit({
+      id: `evt_${Date.now()}`,
+      type: 'message.outbound' as const,
+      payload: { leadId, channel, content, source: 'broker_dashboard' },
+      timestamp: new Date(),
+      source: 'human' as const,
+    });
+
+    res.json({ sent, messageId: message.id, channel });
+  } catch (err) {
+    logger.error('Broker message send failed', { error: (err as Error).message, leadId, contactId, channel });
+    res.status(500).json({ error: 'Failed to send message', detail: (err as Error).message });
+  }
 });
 
 app.get('/api/kpis', async (_req, res) => {
