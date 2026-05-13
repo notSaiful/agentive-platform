@@ -3,6 +3,9 @@ import { LEAD_PROCESS_QUEUE, NURTURE_QUEUE, JOB_TYPES } from './jobs.js';
 import { UnifiedAgent } from '../agents/unified/index.js';
 import { prisma } from '../db/client.js';
 import { TwilioClient, ResendClient } from '@agentive/integrations';
+import { Sentry } from '../monitoring/sentry.js';
+import { logger } from '../monitoring/logger.js';
+import { failureThrottler, alertManager } from '../monitoring/alerts.js';
 
 export function createQueueConnection(redisUrl = process.env.REDIS_URL): ConnectionOptions {
   if (!redisUrl) {
@@ -94,20 +97,20 @@ export function createWorkers(
       switch (job.name) {
         case JOB_TYPES.RUN_NURTURE_CAMPAIGN: {
           const { organizationId, campaignType } = job.data;
-          console.log(`Running nurture campaign for org ${organizationId}, type: ${campaignType}`);
+          logger.info(`Running nurture campaign for org ${organizationId}, type: ${campaignType}`);
 
           if (campaignType === 'daily-health-check') {
             const result = await agent.runNurtureDaily(organizationId);
-            console.log(`Daily nurture result:`, result);
+            logger.info('Daily nurture result', result as unknown as Record<string, unknown>);
           } else if (campaignType === 'cold-revival') {
             const result = await agent.runColdRevival(organizationId);
-            console.log(`Cold revival result:`, result);
+            logger.info('Cold revival result', result as unknown as Record<string, unknown>);
           }
           break;
         }
         case JOB_TYPES.SEND_NURTURE_TOUCH: {
           const { organizationId, leadId, cadenceId, channel, template } = job.data;
-          console.log(`Sending nurture touch to lead ${leadId} via ${channel}, template: ${template}`);
+          logger.info(`Sending nurture touch to lead ${leadId} via ${channel}, template: ${template}`);
 
           const lead = await prisma.lead.findUnique({
             where: { id: leadId },
@@ -200,19 +203,33 @@ export function createWorkers(
   );
 
   leadWorker.on('completed', (job) => {
-    console.log(`Lead job completed: ${job.id} - ${job.name}`);
+    logger.info(`Lead job completed: ${job.id} - ${job.name}`);
   });
 
   leadWorker.on('failed', (job, err) => {
-    console.error(`Lead job failed: ${job?.id} - ${job?.name}`, err);
+    logger.error(`Lead job failed: ${job?.id} - ${job?.name}`, { error: (err as Error).message, jobData: job?.data });
+    Sentry.captureException(err, {
+      tags: { queue: LEAD_PROCESS_QUEUE, jobName: job?.name },
+      extra: { jobId: job?.id, jobData: job?.data, attempts: job?.attemptsMade },
+    });
+    if (failureThrottler.recordFailure(LEAD_PROCESS_QUEUE, job?.name || 'unknown')) {
+      alertManager.addAlert('high_failure_rate', 'critical', `Lead queue high failure rate: ${failureThrottler.getFailureCount(LEAD_PROCESS_QUEUE)} failures in 10min`, { queue: LEAD_PROCESS_QUEUE, jobName: job?.name });
+    }
   });
 
   nurtureWorker.on('completed', (job) => {
-    console.log(`Nurture job completed: ${job.id} - ${job.name}`);
+    logger.info(`Nurture job completed: ${job.id} - ${job.name}`);
   });
 
   nurtureWorker.on('failed', (job, err) => {
-    console.error(`Nurture job failed: ${job?.id} - ${job?.name}`, err);
+    logger.error(`Nurture job failed: ${job?.id} - ${job?.name}`, { error: (err as Error).message, jobData: job?.data });
+    Sentry.captureException(err, {
+      tags: { queue: NURTURE_QUEUE, jobName: job?.name },
+      extra: { jobId: job?.id, jobData: job?.data, attempts: job?.attemptsMade },
+    });
+    if (failureThrottler.recordFailure(NURTURE_QUEUE, job?.name || 'unknown')) {
+      alertManager.addAlert('high_failure_rate', 'critical', `Nurture queue high failure rate: ${failureThrottler.getFailureCount(NURTURE_QUEUE)} failures in 10min`, { queue: NURTURE_QUEUE, jobName: job?.name });
+    }
   });
 
   return { leadWorker, nurtureWorker };

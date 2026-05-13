@@ -3,6 +3,7 @@ import { DEFAULT_ORGANIZATION_ID } from '../../constants.js';
 import { DEFAULT_CADENCE, getNextStage, calculateNextTouchDate, shouldSendTouch, CadenceRule } from './cadence.js';
 import { renderTemplate } from './content.js';
 import { TwilioClient, ResendClient } from '@agentive/integrations';
+import { logger } from '../../monitoring/logger.js';
 
 export interface NurtureLeadInput {
   leadId: string;
@@ -148,7 +149,7 @@ export class FollowUpNurtureAgent {
         await this.scheduleCadence({ leadId: cadence.leadId, organizationId: orgId });
         result.sent++;
       } catch (err) {
-        console.error(`[Nurture] Failed to send touch to ${cadence.leadId}:`, err);
+        logger.error(`Failed to send nurture touch to ${cadence.leadId}`, { error: (err as Error).message, cadenceId: cadence.id });
         await prisma.nurtureCadence.update({
           where: { id: cadence.id },
           data: { status: 'failed' },
@@ -195,7 +196,7 @@ export class FollowUpNurtureAgent {
         });
         result.sent++;
       } catch (err) {
-        console.error(`[Nurture] Failed to schedule revival for ${lead.id}:`, err);
+        logger.error(`Failed to schedule revival for ${lead.id}`, { error: (err as Error).message });
         result.failed++;
       }
     }

@@ -12,12 +12,24 @@ import vapiDemoRoutes from './routes/vapi-demo.js';
 import { calculateKPIs } from './analytics/kpi-tracker.js';
 import { prisma } from './db/client.js';
 import { DEFAULT_ORGANIZATION_ID } from './constants.js';
+import { initSentry, Sentry } from './monitoring/sentry.js';
+import { logger } from './monitoring/logger.js';
+import { getSystemMetrics } from './monitoring/metrics.js';
+import { alertManager } from './monitoring/alerts.js';
 
 dotenv.config();
+initSentry();
 
 const app = express();
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
+
+// ── Trace ID propagation ──────────────────────────────────────────────────────
+app.use((req, _res, next) => {
+  (req as express.Request & { traceId: string }).traceId =
+    (req.headers['x-trace-id'] as string) || `trace_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  next();
+});
 
 // ── Rate Limiting (in-memory) ────────────────────────────────────────────────
 interface RateLimitEntry {
@@ -93,9 +105,9 @@ async function scheduleNurtureJobs() {
       { repeat: { pattern: '0 9 * * *' }, jobId: 'nurture-daily-health-check' }
     );
 
-    console.log('[Scheduler] Daily nurture health check scheduled for 9:00 AM UTC');
+    logger.info('Daily nurture health check scheduled for 9:00 AM UTC');
   } catch (err) {
-    console.error('[Scheduler] Failed to schedule nurture jobs:', err);
+    logger.error('Failed to schedule nurture jobs', { error: (err as Error).message });
   }
 }
 
@@ -113,7 +125,7 @@ globalEmitter.on('lead.created', async (event: AgentEvent) => {
       channel: preferredChannel || 'sms',
     });
   } catch (err) {
-    console.error('Error queuing lead ingest:', err);
+    logger.error('Error queuing lead ingest', { error: (err as Error).message });
   }
 });
 
@@ -126,7 +138,7 @@ globalEmitter.on('message.inbound', async (event: AgentEvent) => {
       channel,
     });
   } catch (err) {
-    console.error('Error queuing message process:', err);
+    logger.error('Error queuing message process', { error: (err as Error).message });
   }
 });
 
@@ -173,20 +185,46 @@ app.post('/webhooks/retell/call-ended', rateLimitMiddleware, async (req, res) =>
           channel: 'sms',
         });
       } else {
-        console.warn('[Retell Webhook] Missing contactId in metadata — cannot SMS fallback');
+        logger.warn('Missing contactId in metadata — cannot SMS fallback');
       }
     }
 
     res.json({ status: 'processed', result });
   } catch (err) {
-    console.error('Retell webhook error:', err);
+    logger.error('Retell webhook error', { error: (err as Error).message });
     res.status(500).json({ error: 'Internal error' });
   }
 });
 
-// Health check
+// ── Health Checks ─────────────────────────────────────────────────────────────
 app.use('/api/demo', demoRoutes);
 app.use('/api/vapi', vapiDemoRoutes);
+
+app.get('/health/live', (_req, res) => {
+  res.status(200).json({ status: 'alive' });
+});
+
+app.get('/health/ready', async (_req, res) => {
+  const checks: Record<string, { ok: boolean; error?: string }> = {};
+
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    checks.database = { ok: true };
+  } catch (err) {
+    checks.database = { ok: false, error: (err as Error).message };
+  }
+
+  try {
+    const redisClient = await leadQueue.client;
+    const redisHealth = await redisClient.ping();
+    checks.redis = { ok: redisHealth === 'PONG' };
+  } catch (err) {
+    checks.redis = { ok: false, error: (err as Error).message };
+  }
+
+  const allOk = Object.values(checks).every((c) => c.ok);
+  res.status(allOk ? 200 : 503).json({ status: allOk ? 'ready' : 'not_ready', checks });
+});
 
 app.get('/health', async (_req, res) => {
   const checks: Record<string, { ok: boolean; error?: string }> = {};
@@ -206,6 +244,37 @@ app.get('/health', async (_req, res) => {
     checks.redis = { ok: redisHealth === 'PONG' };
   } catch (err) {
     checks.redis = { ok: false, error: (err as Error).message };
+  }
+
+  // LLM connectivity check (lightweight ping)
+  try {
+    const openrouterKey = process.env.OPENROUTER_API_KEY;
+    if (openrouterKey) {
+      const resp = await fetch('https://openrouter.ai/api/v1/auth/key', {
+        headers: { Authorization: `Bearer ${openrouterKey}` },
+      });
+      checks.llm = { ok: resp.status === 200 };
+    } else {
+      checks.llm = { ok: false, error: 'OPENROUTER_API_KEY not set' };
+    }
+  } catch (err) {
+    checks.llm = { ok: false, error: (err as Error).message };
+  }
+
+  // Twilio check
+  try {
+    const twilioSid = process.env.TWILIO_ACCOUNT_SID;
+    checks.twilio = { ok: !!twilioSid };
+  } catch (err) {
+    checks.twilio = { ok: false, error: (err as Error).message };
+  }
+
+  // CRM check
+  try {
+    const crmProvider = process.env.CRM_PROVIDER;
+    checks.crm = { ok: !!crmProvider };
+  } catch (err) {
+    checks.crm = { ok: false, error: (err as Error).message };
   }
 
   const allOk = Object.values(checks).every((c) => c.ok);
@@ -229,6 +298,22 @@ app.get('/', (_req, res) => {
     endpoints: ['/health', '/api/vapi/health', '/api/demo', '/webhooks/leads', '/webhooks/sms/inbound'],
     website: 'https://agentive-website-ten.vercel.app',
   });
+});
+
+// ── Metrics & Alerts ─────────────────────────────────────────────────────────
+app.get('/api/metrics', apiKeyMiddleware, async (_req, res) => {
+  try {
+    const metrics = await getSystemMetrics();
+    res.json(metrics);
+  } catch (err) {
+    logger.error('Failed to fetch metrics', { error: (err as Error).message });
+    res.status(500).json({ error: 'Failed to fetch metrics' });
+  }
+});
+
+app.get('/api/alerts', apiKeyMiddleware, (_req, res) => {
+  const active = alertManager.getActiveAlerts();
+  res.json({ active, count: active.length });
 });
 
 // API endpoints for dashboard (auth required)
@@ -278,7 +363,7 @@ app.patch('/api/escalations/:id', async (req, res) => {
       res.status(404).json({ error: 'Escalation not found' });
       return;
     }
-    console.error('Escalation patch error:', err);
+    logger.error('Escalation patch error', { error: (err as Error).message });
     res.status(500).json({ error: 'Internal error' });
   }
 });
@@ -318,16 +403,19 @@ app.get('/api/nurture/cadences', async (req, res) => {
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3001;
 
 const server = app.listen(PORT, () => {
-  console.log(`Agentive Engine running on port ${PORT}`);
+  logger.info(`Agentive Engine running on port ${PORT}`);
 });
 
 process.on('SIGTERM', async () => {
-  console.log('SIGTERM received, shutting down...');
+  logger.info('SIGTERM received, shutting down...');
   await leadWorker?.close();
   await nurtureWorker?.close();
   await leadQueue?.close();
   await nurtureQueue?.close();
   server.close(() => process.exit(0));
 });
+
+// Sentry error handler — must be after all routes
+Sentry.setupExpressErrorHandler(app);
 
 export { app, leadQueue, nurtureQueue };

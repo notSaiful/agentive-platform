@@ -11,6 +11,8 @@ import { checkGuardrails } from '../../orchestrator/guardrails.js';
 import { globalEmitter } from '@agentive/shared';
 import { createTraceRunId, startTrace, endTrace } from '../sarah-demo/tracer.js';
 import { TwilioClient, VapiClient, ResendClient } from '@agentive/integrations';
+import { logger } from '../../monitoring/logger.js';
+import { metricsTracker } from '../../monitoring/metrics.js';
 
 interface InboundLeadInput {
   leadId: string;
@@ -161,7 +163,7 @@ export class UnifiedAgent {
             qualificationComplete: false,
           };
         } catch (err) {
-          console.error('VAPI call failed, falling back to SMS:', err);
+          logger.error('VAPI call failed, falling back to SMS', { error: (err as Error).message, leadId: input.leadId });
           // Fall through to SMS
         }
       }
@@ -171,10 +173,12 @@ export class UnifiedAgent {
       const systemPrompt = QUALIFICATION_STARTER_PROMPT.replace('{name}', firstName);
 
       // Run the agent
+      metricsTracker.startLlmCall(runId);
       const result = await this.executor.invoke({
         input: `${systemPrompt}\n\nLead message: "${input.message}"\n\nContact: ${firstName}, Phone: ${contact.phone ?? 'N/A'}, Email: ${contact.email ?? 'N/A'}`,
         chat_history: [],
       });
+      metricsTracker.endLlmCall(runId);
 
       const responseText = result.output as string;
 
@@ -202,7 +206,7 @@ export class UnifiedAgent {
         try {
           await this.twilio.sendSms(contact.phone, responseText);
         } catch (err) {
-          console.error('SMS send failed:', err);
+          logger.error('SMS send failed', { error: (err as Error).message, leadId: input.leadId, contactId: input.contactId });
         }
       } else if (input.channel === 'email' && contact.email && contact.emailConsent) {
         try {
@@ -212,7 +216,7 @@ export class UnifiedAgent {
             text: responseText,
           });
         } catch (err) {
-          console.error('Email send failed:', err);
+          logger.error('Email send failed', { error: (err as Error).message, leadId: input.leadId, contactId: input.contactId });
         }
       }
 
@@ -238,7 +242,7 @@ export class UnifiedAgent {
         const { scheduleNurtureTool } = await import('./tools.js');
         await scheduleNurtureTool.invoke({ leadId: input.leadId });
       } catch (err) {
-        console.error('Nurture scheduling failed:', err);
+        logger.error('Nurture scheduling failed', { error: (err as Error).message, leadId: input.leadId });
       }
 
       await endTrace({ runId, outputs: { responseText, status: 'contacted' } });
@@ -295,10 +299,12 @@ export class UnifiedAgent {
       );
 
       // Run the agent
+      metricsTracker.startLlmCall(runId);
       const result = await this.executor.invoke({
         input: `Lead replied: "${input.message}"\n\nLead status: ${lead.status}, Score: ${lead.qualificationScore ?? 'N/A'}, Classification: ${lead.classification ?? 'N/A'}`,
         chat_history: chatHistory,
       });
+      metricsTracker.endLlmCall(runId);
 
       const responseText = result.output as string;
 
@@ -318,7 +324,7 @@ export class UnifiedAgent {
         try {
           await this.twilio.sendSms(lead.contact.phone, responseText);
         } catch (err) {
-          console.error('SMS send failed:', err);
+          logger.error('SMS send failed', { error: (err as Error).message, leadId: input.leadId, contactId: lead.contact.id });
         }
       } else if (input.channel === 'email' && lead.contact.email && lead.contact.emailConsent) {
         try {
@@ -328,7 +334,7 @@ export class UnifiedAgent {
             text: responseText,
           });
         } catch (err) {
-          console.error('Email send failed:', err);
+          logger.error('Email send failed', { error: (err as Error).message, leadId: input.leadId, contactId: lead.contact.id });
         }
       }
 
@@ -390,7 +396,7 @@ export class UnifiedAgent {
         const { syncCrmTool } = await import('./tools.js');
         await syncCrmTool.invoke({ leadId, contactId, action: 'create' });
       } catch (err) {
-        console.error('CRM sync failed:', err);
+        logger.error('CRM sync failed', { error: (err as Error).message, leadId });
       }
     }
 
@@ -422,7 +428,7 @@ export class UnifiedAgent {
           classification,
         };
       } catch (err) {
-        console.error('Auto-booking failed:', err);
+        logger.error('Auto-booking failed', { error: (err as Error).message, leadId });
         // Fall through to nurture
       }
     }
