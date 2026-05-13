@@ -8,7 +8,7 @@ const { mockPrisma, mockEmitter } = vi.hoisted(() => ({
     conversation: { findFirst: vi.fn(), create: vi.fn() },
     message: { create: vi.fn() },
     communicationEvent: { create: vi.fn() },
-    nurtureCadence: { create: vi.fn(), findMany: vi.fn(), update: vi.fn() },
+    nurtureCadence: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), update: vi.fn() },
     appointment: { create: vi.fn() },
     escalation: { create: vi.fn() },
   },

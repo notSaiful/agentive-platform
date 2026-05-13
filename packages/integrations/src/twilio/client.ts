@@ -85,8 +85,13 @@ export class TwilioClient {
       now.toLocaleString('en-US', { timeZone: timezone, hour: 'numeric', hour12: false })
     );
     const { start, end } = COMPLIANCE.QUIET_HOURS;
-    if (end <= start) return localHour >= end && localHour < start;
-    return localHour >= end && localHour < start;
+    // Quiet hours are [start, end). We can send when we're NOT in quiet hours.
+    if (end <= start) {
+      // Wrap-around (e.g., 21:00 to 08:00) — quiet hours span midnight
+      return localHour >= end && localHour < start;
+    }
+    // Non-wrap-around (e.g., 10:00 to 18:00)
+    return localHour < start || localHour >= end;
   }
 
   /**
@@ -113,6 +118,8 @@ export class TwilioClient {
   private logSend(to: string, body: string, sid: string, status: string): void {
     const logs = this.sendLog.get(to) ?? [];
     logs.push({ to, body, timestamp: new Date(), status, sid });
+    // Cap log size to prevent unbounded memory growth
+    if (logs.length > 100) logs.shift();
     this.sendLog.set(to, logs);
   }
 }

@@ -26,9 +26,10 @@ export function routeLead(input: RouteInput): RouteResult {
     return { route: 'NURTURE', reason: `${input.classification} lead, not ready for booking`, targetAgent: 'follow-up-nurture' };
   }
 
-  if (input.classification === 'COLD') {
+  if (input.classification === 'COLD' && input.score > 0) {
     return { route: 'NURTURE', reason: 'Cold lead, needs nurture', targetAgent: 'follow-up-nurture' };
   }
 
+  // Score of 0 or negative means no qualification signals at all
   return { route: 'DISQUALIFY', reason: 'Does not meet qualification criteria' };
 }

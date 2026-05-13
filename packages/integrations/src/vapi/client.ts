@@ -47,7 +47,7 @@ export class VapiClient {
           customer: {
             number: params.customerPhoneNumber,
           },
-          phoneNumberId: params.fromNumber,
+          phoneNumberId: process.env.VAPI_PHONE_NUMBER_ID || params.fromNumber,
           metadata: params.metadata,
         }),
       });

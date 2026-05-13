@@ -89,7 +89,7 @@ model Contact {
   leads           Lead[]
   conversations   Conversation[]
   appointments    Appointment[]
-  broker          Broker?
+  broker          Broker?         @relation(name: "ContactBroker")
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
@@ -116,6 +116,7 @@ model Lead {
   escalations      Escalation[]
   tenantApp        TenantApplication?
   nurtureCadences  NurtureCadence[]
+  outcomes         Outcome[]
   firstResponseAt  DateTime?
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
@@ -136,7 +137,7 @@ model Conversation {
   contact        Contact    @relation(fields: [contactId], references: [id])
   messages       Message[]
   status         String     @default("active")
-  agentId        String     @default("speed-to-lead")
+  agentId        String     @default("unified")
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
 
@@ -238,6 +239,7 @@ model AgentEvent {
 model Outcome {
   id          String   @id @default(cuid())
   leadId      String
+  lead        Lead     @relation(fields: [leadId], references: [id])
   type        String
   value       Json
   attributedTo String
@@ -305,7 +307,7 @@ model Broker {
   organizationId  String
   organization    Organization  @relation(fields: [organizationId], references: [id])
   contactId       String        @unique
-  contact         Contact       @relation(fields: [contactId], references: [id])
+  contact         Contact       @relation(name: "ContactBroker", fields: [contactId], references: [id])
   firmName        String?
   licenseNumber   String?
   specialization  String?       // Tenant Rep, Landlord Rep, Investment Sales
@@ -354,6 +356,7 @@ model NurtureCadence {
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
+  @@unique([leadId, stage])
   @@index([organizationId])
   @@index([leadId])
   @@index([status])

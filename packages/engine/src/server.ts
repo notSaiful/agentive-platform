@@ -19,6 +19,56 @@ const app = express();
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
+// ── Rate Limiting (in-memory) ────────────────────────────────────────────────
+interface RateLimitEntry {
+  count: number;
+  resetAt: number;
+}
+const rateLimitMap = new Map<string, RateLimitEntry>();
+const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+const RATE_LIMIT_MAX = 100; // 100 requests per window
+
+function rateLimitMiddleware(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  const now = Date.now();
+  const entry = rateLimitMap.get(ip);
+
+  if (!entry || now > entry.resetAt) {
+    rateLimitMap.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    next();
+    return;
+  }
+
+  if (entry.count >= RATE_LIMIT_MAX) {
+    res.status(429).json({ error: 'Too many requests — please slow down' });
+    return;
+  }
+
+  entry.count++;
+  next();
+}
+
+// ── API Key Auth ─────────────────────────────────────────────────────────────
+function apiKeyMiddleware(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) {
+    // In development without API_KEY set, allow through
+    if (process.env.NODE_ENV === 'development') {
+      next();
+      return;
+    }
+    res.status(500).json({ error: 'API_KEY not configured' });
+    return;
+  }
+
+  const headerKey = req.headers['x-api-key'];
+  if (headerKey !== apiKey) {
+    res.status(401).json({ error: 'Unauthorized — invalid or missing x-api-key header' });
+    return;
+  }
+  next();
+}
+
 // Queue setup
 const connection = createQueueConnection();
 const { leadQueue, nurtureQueue } = createQueues(connection);
@@ -80,10 +130,10 @@ globalEmitter.on('message.inbound', async (event: AgentEvent) => {
   }
 });
 
-// Webhook endpoints
-app.post('/webhooks/leads', handleLeadWebhook);
-app.post('/webhooks/sms/inbound', handleInboundSms);
-app.post('/webhooks/retell/call-ended', async (req, res) => {
+// Webhook endpoints (rate limited)
+app.post('/webhooks/leads', rateLimitMiddleware, handleLeadWebhook);
+app.post('/webhooks/sms/inbound', rateLimitMiddleware, handleInboundSms);
+app.post('/webhooks/retell/call-ended', rateLimitMiddleware, async (req, res) => {
   try {
     const { call_id, call_status, call_analysis, metadata, transcript } = req.body;
 
@@ -114,7 +164,7 @@ app.post('/webhooks/retell/call-ended', async (req, res) => {
 
     if (result.shouldSmsFallback) {
       const contactId = metadata?.contactId;
-      if (contactId) {
+      if (contactId && typeof contactId === 'string') {
         await agent.processInboundLead({
           leadId,
           contactId,
@@ -122,6 +172,8 @@ app.post('/webhooks/retell/call-ended', async (req, res) => {
           message: 'Lead did not answer phone call',
           channel: 'sms',
         });
+      } else {
+        console.warn('[Retell Webhook] Missing contactId in metadata — cannot SMS fallback');
       }
     }
 
@@ -179,7 +231,13 @@ app.get('/', (_req, res) => {
   });
 });
 
-// API endpoints for dashboard
+// API endpoints for dashboard (auth required)
+app.use('/api/leads', apiKeyMiddleware);
+app.use('/api/kpis', apiKeyMiddleware);
+app.use('/api/escalations', apiKeyMiddleware);
+app.use('/api/appointments', apiKeyMiddleware);
+app.use('/api/nurture', apiKeyMiddleware);
+
 app.get('/api/leads', async (req, res) => {
   const { status, classification } = req.query;
   const where: Record<string, string> = {};
@@ -209,11 +267,20 @@ app.get('/api/escalations', async (_req, res) => {
 app.patch('/api/escalations/:id', async (req, res) => {
   const { id } = req.params;
   const { status, assignedTo } = req.body;
-  const escalation = await prisma.escalation.update({
-    where: { id },
-    data: { status, assignedTo, resolvedAt: status === 'resolved' ? new Date() : undefined, updatedAt: new Date() },
-  });
-  res.json(escalation);
+  try {
+    const escalation = await prisma.escalation.update({
+      where: { id },
+      data: { status, assignedTo, resolvedAt: status === 'resolved' ? new Date() : undefined, updatedAt: new Date() },
+    });
+    res.json(escalation);
+  } catch (err) {
+    if ((err as Error).message.includes('P2025')) {
+      res.status(404).json({ error: 'Escalation not found' });
+      return;
+    }
+    console.error('Escalation patch error:', err);
+    res.status(500).json({ error: 'Internal error' });
+  }
 });
 
 app.get('/api/appointments', async (_req, res) => {
@@ -256,10 +323,10 @@ const server = app.listen(PORT, () => {
 
 process.on('SIGTERM', async () => {
   console.log('SIGTERM received, shutting down...');
-  await leadWorker.close();
-  await nurtureWorker.close();
-  await leadQueue.close();
-  await nurtureQueue.close();
+  await leadWorker?.close();
+  await nurtureWorker?.close();
+  await leadQueue?.close();
+  await nurtureQueue?.close();
   server.close(() => process.exit(0));
 });
 

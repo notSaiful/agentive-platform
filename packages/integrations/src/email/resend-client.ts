@@ -126,6 +126,8 @@ export class ResendClient {
   private logSend(to: string, subject: string, id: string, status: string): void {
     const logs = this.sendLog.get(to) ?? [];
     logs.push({ to, subject, timestamp: new Date(), status, id });
+    // Cap log size to prevent unbounded memory growth
+    if (logs.length > 100) logs.shift();
     this.sendLog.set(to, logs);
   }
 }

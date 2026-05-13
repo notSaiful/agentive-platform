@@ -45,10 +45,10 @@ export interface CrmClient {
   logCall(personId: string, notes: string, duration?: number): Promise<void>;
 
   /** Log an SMS event */
-  logSms(personId: string, message: string): Promise<void>;
+  logSms(personId: string, message: string, toNumber?: string): Promise<void>;
 
   /** Log an email event */
-  logEmail(personId: string, subject: string, body: string): Promise<void>;
+  logEmail(personId: string, subject: string, body: string, toEmail?: string): Promise<void>;
 
   /** Create a task for a broker/agent */
   createTask(personId: string, title: string, dueDate?: Date): Promise<CrmTask>;

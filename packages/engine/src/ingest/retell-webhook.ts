@@ -32,11 +32,15 @@ interface CallEndedResult {
 export async function handleRetellCallEnded(input: CallEndedInput): Promise<CallEndedResult> {
   const needsFallback = input.disposition === 'no-answer' || input.disposition === 'voicemail';
 
+  // Fetch lead to get the real contactId for referential integrity
+  const lead = await prisma.lead.findUnique({ where: { id: input.leadId } });
+  const contactId = lead?.contactId ?? '';
+
   await prisma.communicationEvent.create({
     data: {
       organizationId: DEFAULT_ORGANIZATION_ID,
       leadId: input.leadId,
-      contactId: '',
+      contactId,
       channel: 'phone',
       direction: 'outbound',
       content: input.transcript || `Call ${input.disposition}`,
@@ -55,7 +59,8 @@ export async function handleRetellCallEnded(input: CallEndedInput): Promise<Call
 
   const qData = input.qualificationData;
   if (!qData) {
-    return { leadId: input.leadId, disposition: input.disposition, shouldSmsFallback: true };
+    // Call was answered but Retell didn't provide qualification data — do NOT SMS fallback
+    return { leadId: input.leadId, disposition: input.disposition, shouldSmsFallback: false };
   }
 
   const intentSignals: string[] = [];
@@ -82,8 +87,8 @@ export async function handleRetellCallEnded(input: CallEndedInput): Promise<Call
     confidence: 0.85,
   });
 
-  const lead = await prisma.lead.findUnique({ where: { id: input.leadId } });
-  if (lead) {
+  const existingLead = await prisma.lead.findUnique({ where: { id: input.leadId } });
+  if (existingLead) {
     await prisma.lead.update({
       where: { id: input.leadId },
       data: {

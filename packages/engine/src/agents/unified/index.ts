@@ -106,10 +106,13 @@ export class UnifiedAgent {
       const contact = await prisma.contact.findUnique({ where: { id: input.contactId } });
       if (!lead || !contact) throw new Error('Lead or contact not found');
 
-      // Guardrails
+      // Guardrails — use contact's timezone, not server timezone
+      const localHour = contact.timezone
+        ? Number(new Date().toLocaleString('en-US', { timeZone: contact.timezone, hour: 'numeric', hour12: false }))
+        : new Date().getHours();
       const guardrailResult = checkGuardrails({
         channel: input.channel,
-        localHour: new Date().getHours(),
+        localHour,
         hasConsent: input.channel === 'email' ? contact.emailConsent : contact.smsConsent,
       });
 
@@ -175,14 +178,15 @@ export class UnifiedAgent {
 
       const responseText = result.output as string;
 
-      // Save conversation
+      // Save conversation (if VAPI fell back to SMS, record the actual channel)
+      const actualChannel = input.channel === 'phone' ? 'sms' : input.channel;
       const conversation = await this.getOrCreateConversation(input.leadId, contact.id);
       await prisma.message.create({
         data: {
           organizationId: DEFAULT_ORGANIZATION_ID,
           conversationId: conversation.id,
           role: 'agent',
-          channel: input.channel,
+          channel: actualChannel,
           content: responseText,
         },
       });
@@ -338,7 +342,8 @@ export class UnifiedAgent {
 
       // Check for ROUTE directive
       const routeMatch = responseText.match(/ROUTE:\s*(\d+|disqualify)/i);
-      const maxMessagesReached = conversation.messages.length >= 5;
+      // Account for the inbound + outbound messages about to be saved (we already saved inbound, now saving outbound)
+      const maxMessagesReached = conversation.messages.length + 2 >= 5;
 
       if (routeMatch || maxMessagesReached) {
         const routeValue = routeMatch ? routeMatch[1] : '50';
@@ -393,6 +398,7 @@ export class UnifiedAgent {
       // Try to book appointment
       try {
         const { bookAppointmentTool } = await import('./tools.js');
+        const contact = await prisma.contact.findUnique({ where: { id: contactId } });
         const tomorrow = new Date();
         tomorrow.setDate(tomorrow.getDate() + 1);
         const nextWeek = new Date();
@@ -404,7 +410,7 @@ export class UnifiedAgent {
           eventTypeId: process.env.CAL_EVENT_TYPE_ID ?? '5413213',
           dateFrom: tomorrow.toISOString().split('T')[0],
           dateTo: nextWeek.toISOString().split('T')[0],
-          timezone: 'America/New_York',
+          timezone: contact?.timezone ?? 'America/New_York',
         });
 
         return {

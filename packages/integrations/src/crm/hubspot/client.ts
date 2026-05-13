@@ -65,7 +65,7 @@ export class HubSpotClient implements CrmClient {
     if (person.firstName) properties.firstname = person.firstName;
     if (person.lastName) properties.lastname = person.lastName;
     if (person.emails?.[0]?.value) properties.email = person.emails[0].value;
-    if (person.phones?.[0]?.value) properties.phone = person.phones[0].value;
+    if (person.phones?.[0]?.value) properties.phone = person.phones[0].value.replace(/\D/g, '');
 
     await this.request(`/crm/v3/objects/contacts/${personId}`, {
       method: 'PATCH',
@@ -95,8 +95,11 @@ export class HubSpotClient implements CrmClient {
 
       if (result.total === 0 || result.results.length === 0) return null;
       return { id: result.results[0].id };
-    } catch {
-      return null;
+    } catch (err) {
+      const status = (err as Error).message.match(/\((\d+)\)/)?.[1];
+      if (status === '404') return null;
+      console.error('[HubSpot] findPersonByEmail failed:', err);
+      throw err;
     }
   }
 
@@ -123,8 +126,11 @@ export class HubSpotClient implements CrmClient {
 
       if (result.total === 0 || result.results.length === 0) return null;
       return { id: result.results[0].id };
-    } catch {
-      return null;
+    } catch (err) {
+      const status = (err as Error).message.match(/\((\d+)\)/)?.[1];
+      if (status === '404') return null;
+      console.error('[HubSpot] findPersonByPhone failed:', err);
+      throw err;
     }
   }
 
@@ -134,7 +140,7 @@ export class HubSpotClient implements CrmClient {
         method: 'POST',
         body: JSON.stringify({
           engagement: { active: true, type: type.toUpperCase(), timestamp: Date.now() },
-          associations: { contactIds: [parseInt(personId, 10)] },
+          associations: { contactIds: [personId] },
           metadata,
         }),
       });
@@ -151,21 +157,21 @@ export class HubSpotClient implements CrmClient {
     });
   }
 
-  async logSms(personId: string, message: string): Promise<void> {
+  async logSms(personId: string, message: string, toNumber?: string): Promise<void> {
     await this.createEngagement(personId, 'SMS', {
       body: message,
       fromNumber: process.env.TWILIO_PHONE_NUMBER ?? '',
-      toNumber: '',
+      toNumber: toNumber ?? '',
       status: 'SENT',
     });
   }
 
-  async logEmail(personId: string, subject: string, body: string): Promise<void> {
+  async logEmail(personId: string, subject: string, body: string, toEmail?: string): Promise<void> {
     await this.createEngagement(personId, 'EMAIL', {
       subject,
       text: body,
       from: { email: process.env.RESEND_FROM_EMAIL ?? '' },
-      to: [{ email: '' }],
+      to: [{ email: toEmail ?? '' }],
     });
   }
 
@@ -185,7 +191,9 @@ export class HubSpotClient implements CrmClient {
     });
 
     // Step 2: associate task (0-27) to contact (0-1) using the portal-specific typeId
+    // Default 204 works for most portals; override via HUBSPOT_TASK_ASSOCIATION_TYPE_ID if needed
     try {
+      const associationTypeId = Number(process.env.HUBSPOT_TASK_ASSOCIATION_TYPE_ID ?? '204');
       await this.request('/crm/v4/associations/0-27/0-1/batch/create', {
         method: 'POST',
         body: JSON.stringify({
@@ -193,7 +201,7 @@ export class HubSpotClient implements CrmClient {
             {
               from: { id: result.id },
               to: { id: personId },
-              types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 204 }],
+              types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId }],
             },
           ],
         }),

@@ -51,6 +51,12 @@ export class FollowUpNurtureAgent {
 
     if (!nextRule) return;
 
+    // Prevent duplicate cadences for the same stage
+    const existing = await prisma.nurtureCadence.findFirst({
+      where: { leadId, stage: nextRule.stage, status: 'scheduled' },
+    });
+    if (existing) return;
+
     const lastTouchAt = lastCadence?.sentAt ?? lead.createdAt;
     const scheduledAt = calculateNextTouchDate(lastTouchAt, nextRule);
 
@@ -102,13 +108,17 @@ export class FollowUpNurtureAgent {
             const smsResult = await this.twilio.sendSms(contact.phone, rendered.sms || rendered.body);
             await this.logCommunicationEvent(cadence.leadId, contact.id, 'sms', rendered.sms || rendered.body, { twilioSid: smsResult.sid, cadenceId: cadence.id });
           } else {
-            // Skip due to quiet hours — reschedule for tomorrow morning
-            const tomorrow = new Date();
-            tomorrow.setDate(tomorrow.getDate() + 1);
-            tomorrow.setHours(9, 0, 0, 0);
+            // Skip due to quiet hours — reschedule for 9am in the contact's timezone
+            const contactTz = contact.timezone ?? 'America/New_York';
+            const now = new Date();
+            const tomorrow9am = new Date(
+              now.toLocaleString('en-US', { timeZone: contactTz, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' }).replace(/\//g, '-')
+            );
+            tomorrow9am.setDate(tomorrow9am.getDate() + 1);
+            tomorrow9am.setHours(9, 0, 0, 0);
             await prisma.nurtureCadence.update({
               where: { id: cadence.id },
-              data: { scheduledAt: tomorrow },
+              data: { scheduledAt: tomorrow9am },
             });
             result.skipped++;
             continue;
@@ -159,7 +169,7 @@ export class FollowUpNurtureAgent {
         organizationId: orgId,
         status: { in: ['nurture', 'qualified'] },
         updatedAt: { lte: new Date(Date.now() - minDaysInactive * 24 * 60 * 60 * 1000) },
-        nurtureCadences: { none: { status: { in: ['scheduled', 'sent'] } } },
+        nurtureCadences: { none: { status: 'scheduled' } },
       },
       include: { contact: true },
     });

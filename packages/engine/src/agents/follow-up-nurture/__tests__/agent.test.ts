@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const { mockPrisma, mockEmitter } = vi.hoisted(() => ({
   mockPrisma: {
     lead: { findUnique: vi.fn(), findMany: vi.fn() },
-    nurtureCadence: { create: vi.fn(), findMany: vi.fn(), update: vi.fn() },
+    nurtureCadence: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), update: vi.fn() },
     communicationEvent: { create: vi.fn() },
   },
   mockEmitter: { emit: vi.fn() },
