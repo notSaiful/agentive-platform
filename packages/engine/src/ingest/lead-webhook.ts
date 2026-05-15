@@ -1,28 +1,28 @@
 import { Request, Response } from 'express';
 import { prisma } from '../db/client.js';
 import { globalEmitter } from '@agentive/shared';
-import { DEFAULT_ORGANIZATION_ID } from '../constants.js';
 
 export async function handleLeadWebhook(req: Request, res: Response): Promise<void> {
   const { source, firstName, lastName, email, phone, message, smsConsent, emailConsent } = req.body;
+  const organizationId = (req as Request & { organizationId?: string }).organizationId || 'system';
 
   if (!firstName || !lastName || (!email && !phone)) {
     res.status(400).json({ error: 'First name, last name, and email or phone required' });
     return;
   }
 
-  // Deduplicate: check for existing contact by email or phone
+  // Deduplicate: check for existing contact by email or phone scoped to org
   const existingContact = email
-    ? await prisma.contact.findFirst({ where: { email } })
+    ? await prisma.contact.findFirst({ where: { email, organizationId } })
     : phone
-      ? await prisma.contact.findFirst({ where: { phone } })
+      ? await prisma.contact.findFirst({ where: { phone, organizationId } })
       : null;
 
   if (existingContact) {
     // Create a new lead for the existing contact (multi-property inquiries)
     const lead = await prisma.lead.create({
       data: {
-        organizationId: DEFAULT_ORGANIZATION_ID,
+        organizationId,
         source,
         sourceDetails: req.body.sourceDetails || {},
         contactId: existingContact.id,
@@ -45,7 +45,7 @@ export async function handleLeadWebhook(req: Request, res: Response): Promise<vo
   // Explicit consent required — do NOT auto-consent just because contact info was provided
   const contact = await prisma.contact.create({
     data: {
-      organizationId: DEFAULT_ORGANIZATION_ID,
+      organizationId,
       firstName,
       lastName,
       email: email || null,
@@ -58,7 +58,7 @@ export async function handleLeadWebhook(req: Request, res: Response): Promise<vo
 
   const lead = await prisma.lead.create({
     data: {
-      organizationId: DEFAULT_ORGANIZATION_ID,
+      organizationId,
       source,
       sourceDetails: req.body.sourceDetails || {},
       contactId: contact.id,

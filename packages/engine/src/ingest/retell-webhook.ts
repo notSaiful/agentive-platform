@@ -1,7 +1,6 @@
 import { prisma } from '../db/client.js';
 import { scoreLead } from '../agents/speed-to-lead/scorer.js';
 import { routeLead } from '../orchestrator/router.js';
-import { DEFAULT_ORGANIZATION_ID } from '../constants.js';
 
 interface CallEndedInput {
   callId: string;
@@ -9,6 +8,7 @@ interface CallEndedInput {
   callStatus: string;
   disposition: string;
   transcript?: string;
+  organizationId?: string;
   qualificationData?: {
     budget?: string;
     timelineDays?: number;
@@ -31,6 +31,7 @@ interface CallEndedResult {
 
 export async function handleRetellCallEnded(input: CallEndedInput): Promise<CallEndedResult> {
   const needsFallback = input.disposition === 'no-answer' || input.disposition === 'voicemail';
+  const organizationId = input.organizationId || 'system';
 
   // Fetch lead to get the real contactId for referential integrity
   const lead = await prisma.lead.findUnique({ where: { id: input.leadId } });
@@ -38,7 +39,7 @@ export async function handleRetellCallEnded(input: CallEndedInput): Promise<Call
 
   await prisma.communicationEvent.create({
     data: {
-      organizationId: DEFAULT_ORGANIZATION_ID,
+      organizationId,
       leadId: input.leadId,
       contactId,
       channel: 'phone',

@@ -1,5 +1,6 @@
 import express from 'express';
 import dotenv from 'dotenv';
+import crypto from 'crypto';
 import { handleLeadWebhook } from './ingest/lead-webhook.js';
 import { handleInboundSms } from './ingest/sms-webhook.js';
 import { handleRetellCallEnded } from './ingest/retell-webhook.js';
@@ -61,24 +62,76 @@ function rateLimitMiddleware(req: express.Request, res: express.Response, next: 
   next();
 }
 
-// ── API Key Auth ─────────────────────────────────────────────────────────────
-function apiKeyMiddleware(req: express.Request, res: express.Response, next: express.NextFunction): void {
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) {
-    // In development without API_KEY set, allow through
-    if (process.env.NODE_ENV === 'development') {
+// ── Organization Context ───────────────────────────────────────────────────────
+declare global {
+  namespace Express {
+    interface Request {
+      organizationId?: string;
+      orgSlug?: string;
+    }
+  }
+}
+
+// ── API Key Auth (resolves org from DB) ─────────────────────────────────────
+async function apiKeyMiddleware(req: express.Request, res: express.Response, next: express.NextFunction): Promise<void> {
+  const headerKey = req.headers['x-api-key'] as string | undefined;
+  if (!headerKey) {
+    // In development without API_KEY set, allow through with system org
+    if (process.env.NODE_ENV === 'development' && !process.env.API_KEY) {
+      req.organizationId = DEFAULT_ORGANIZATION_ID;
       next();
       return;
     }
-    res.status(500).json({ error: 'API_KEY not configured' });
+    res.status(401).json({ error: 'Unauthorized — missing x-api-key header' });
     return;
   }
 
-  const headerKey = req.headers['x-api-key'];
-  if (headerKey !== apiKey) {
-    res.status(401).json({ error: 'Unauthorized — invalid or missing x-api-key header' });
+  try {
+    const org = await prisma.organization.findUnique({ where: { apiKey: headerKey } });
+    if (!org || org.status !== 'active') {
+      res.status(401).json({ error: 'Unauthorized — invalid or inactive organization' });
+      return;
+    }
+    req.organizationId = org.id;
+    req.orgSlug = org.slug;
+    next();
+  } catch (err) {
+    logger.error('API key lookup failed', { error: (err as Error).message });
+    res.status(500).json({ error: 'Internal error' });
+  }
+}
+
+// ── Webhook Org Resolution ──────────────────────────────────────────────────
+async function resolveWebhookOrg(req: express.Request, res: express.Response, next: express.NextFunction): Promise<void> {
+  const orgSlug = (req.query.orgSlug as string) || (req.query.org as string);
+  const orgId = (req.query.orgId as string);
+
+  if (orgId) {
+    req.organizationId = orgId;
+    next();
     return;
   }
+
+  if (orgSlug) {
+    try {
+      const org = await prisma.organization.findUnique({ where: { slug: orgSlug } });
+      if (!org || org.status !== 'active') {
+        res.status(401).json({ error: 'Invalid or inactive organization' });
+        return;
+      }
+      req.organizationId = org.id;
+      req.orgSlug = org.slug;
+      next();
+      return;
+    } catch (err) {
+      logger.error('Webhook org lookup failed', { error: (err as Error).message });
+      res.status(500).json({ error: 'Internal error' });
+      return;
+    }
+  }
+
+  // Fallback to default org for backward compatibility with existing webhooks
+  req.organizationId = DEFAULT_ORGANIZATION_ID;
   next();
 }
 
@@ -143,9 +196,9 @@ globalEmitter.on('message.inbound', async (event: AgentEvent) => {
   }
 });
 
-// Webhook endpoints (rate limited)
-app.post('/webhooks/leads', rateLimitMiddleware, handleLeadWebhook);
-app.post('/webhooks/sms/inbound', rateLimitMiddleware, handleInboundSms);
+// Webhook endpoints (rate limited + org resolved)
+app.post('/webhooks/leads', rateLimitMiddleware, resolveWebhookOrg, handleLeadWebhook);
+app.post('/webhooks/sms/inbound', rateLimitMiddleware, resolveWebhookOrg, handleInboundSms);
 app.post('/webhooks/retell/call-ended', rateLimitMiddleware, async (req, res) => {
   try {
     const { call_id, call_status, call_analysis, metadata, transcript } = req.body;
@@ -162,6 +215,7 @@ app.post('/webhooks/retell/call-ended', rateLimitMiddleware, async (req, res) =>
       callStatus: call_status,
       disposition: call_analysis?.call_summary || call_status,
       transcript,
+      organizationId: req.organizationId,
       qualificationData: call_analysis?.custom_analysis_data
         ? {
             budget: call_analysis.custom_analysis_data.lead_budget,
@@ -326,7 +380,7 @@ app.use('/api/nurture', apiKeyMiddleware);
 
 app.get('/api/leads', async (req, res) => {
   const { status, classification } = req.query;
-  const where: Record<string, string> = {};
+  const where: Record<string, string> = { organizationId: req.organizationId! };
   if (status) where.status = status as string;
   if (classification) where.classification = classification as string;
   const leads = await prisma.lead.findMany({ where, include: { contact: true }, orderBy: { createdAt: 'desc' } });
@@ -337,8 +391,14 @@ app.get('/api/leads', async (req, res) => {
 app.get('/api/leads/:id/conversations', async (req, res) => {
   const { id } = req.params;
   try {
+    // Verify lead belongs to org
+    const lead = await prisma.lead.findFirst({ where: { id, organizationId: req.organizationId! } });
+    if (!lead) {
+      res.status(404).json({ error: 'Lead not found' });
+      return;
+    }
     const conversations = await prisma.conversation.findMany({
-      where: { leadId: id },
+      where: { leadId: id, organizationId: req.organizationId! },
       include: {
         messages: { orderBy: { timestamp: 'asc' } },
         lead: { include: { contact: true } },
@@ -360,19 +420,20 @@ app.post('/api/messages/send', async (req, res) => {
   }
 
   try {
-    const contact = await prisma.contact.findUnique({ where: { id: contactId } });
+    const contact = await prisma.contact.findFirst({ where: { id: contactId, organizationId: req.organizationId! } });
     if (!contact) {
       res.status(404).json({ error: 'Contact not found' });
       return;
     }
 
-    const conversation = await prisma.conversation.findFirst({ where: { leadId } });
+    const conversation = await prisma.conversation.findFirst({ where: { leadId, organizationId: req.organizationId! } });
     if (!conversation) {
       res.status(404).json({ error: 'No conversation found for this lead' });
       return;
     }
 
     // Send via correct channel
+    const orgId = req.organizationId!;
     let sent = false;
     if (channel === 'sms' && contact.phone && contact.smsConsent) {
       const twilio = new TwilioClient({
@@ -385,7 +446,7 @@ app.post('/api/messages/send', async (req, res) => {
         const result = await twilio.sendSms(contact.phone, content);
         await prisma.communicationEvent.create({
           data: {
-            organizationId: DEFAULT_ORGANIZATION_ID,
+            organizationId: orgId,
             leadId,
             contactId,
             channel: 'sms',
@@ -408,7 +469,7 @@ app.post('/api/messages/send', async (req, res) => {
       });
       await prisma.communicationEvent.create({
         data: {
-          organizationId: DEFAULT_ORGANIZATION_ID,
+          organizationId: orgId,
           leadId,
           contactId,
           channel: 'email',
@@ -423,7 +484,7 @@ app.post('/api/messages/send', async (req, res) => {
     // Save message to conversation
     const message = await prisma.message.create({
       data: {
-        organizationId: DEFAULT_ORGANIZATION_ID,
+        organizationId: orgId,
         conversationId: conversation.id,
         role: 'agent',
         channel,
@@ -446,17 +507,20 @@ app.post('/api/messages/send', async (req, res) => {
   }
 });
 
-app.get('/api/kpis', async (_req, res) => {
+app.get('/api/kpis', async (req, res) => {
   const leads = await prisma.lead.findMany({
-    where: { createdAt: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } },
+    where: {
+      organizationId: req.organizationId!,
+      createdAt: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+    },
   });
   const kpis = calculateKPIs(leads);
   res.json(kpis);
 });
 
-app.get('/api/escalations', async (_req, res) => {
+app.get('/api/escalations', async (req, res) => {
   const escalations = await prisma.escalation.findMany({
-    where: { status: 'pending' },
+    where: { status: 'pending', organizationId: req.organizationId! },
     include: { lead: { include: { contact: true } } },
     orderBy: { createdAt: 'desc' },
   });
@@ -467,6 +531,12 @@ app.patch('/api/escalations/:id', async (req, res) => {
   const { id } = req.params;
   const { status, assignedTo } = req.body;
   try {
+    // Verify escalation belongs to org
+    const existing = await prisma.escalation.findFirst({ where: { id, organizationId: req.organizationId! } });
+    if (!existing) {
+      res.status(404).json({ error: 'Escalation not found' });
+      return;
+    }
     const escalation = await prisma.escalation.update({
       where: { id },
       data: { status, assignedTo, resolvedAt: status === 'resolved' ? new Date() : undefined, updatedAt: new Date() },
@@ -482,8 +552,9 @@ app.patch('/api/escalations/:id', async (req, res) => {
   }
 });
 
-app.get('/api/appointments', async (_req, res) => {
+app.get('/api/appointments', async (req, res) => {
   const appointments = await prisma.appointment.findMany({
+    where: { organizationId: req.organizationId! },
     include: { lead: { include: { contact: true } } },
     orderBy: { scheduledAt: 'asc' },
   });
@@ -492,9 +563,9 @@ app.get('/api/appointments', async (_req, res) => {
 
 // Nurture campaign endpoints
 app.post('/api/nurture/campaigns', async (req, res) => {
-  const { organizationId, campaignType, leadId } = req.body;
+  const { campaignType, leadId } = req.body;
   const job = await nurtureQueue.add(JOB_TYPES.RUN_NURTURE_CAMPAIGN, {
-    organizationId,
+    organizationId: req.organizationId!,
     campaignType,
     leadId,
   });
@@ -502,9 +573,8 @@ app.post('/api/nurture/campaigns', async (req, res) => {
 });
 
 app.get('/api/nurture/cadences', async (req, res) => {
-  const { organizationId, status } = req.query;
-  const where: Record<string, string> = {};
-  if (organizationId) where.organizationId = organizationId as string;
+  const { status } = req.query;
+  const where: Record<string, string> = { organizationId: req.organizationId! };
   if (status) where.status = status as string;
   const cadences = await prisma.nurtureCadence.findMany({
     where,
@@ -512,6 +582,113 @@ app.get('/api/nurture/cadences', async (req, res) => {
     orderBy: { scheduledAt: 'asc' },
   });
   res.json(cadences);
+});
+
+// ── Admin Endpoints ───────────────────────────────────────────────────────────
+// These require a master admin key (different from org API keys)
+function adminMiddleware(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  const adminKey = process.env.ADMIN_API_KEY;
+  if (!adminKey) {
+    res.status(500).json({ error: 'Admin not configured' });
+    return;
+  }
+  const headerKey = req.headers['x-api-key'] as string | undefined;
+  if (headerKey !== adminKey) {
+    res.status(403).json({ error: 'Forbidden — admin only' });
+    return;
+  }
+  next();
+}
+
+app.get('/admin/organizations', adminMiddleware, async (_req, res) => {
+  const orgs = await prisma.organization.findMany({
+    select: { id: true, name: true, slug: true, status: true, plan: true, createdAt: true, updatedAt: true },
+    orderBy: { createdAt: 'desc' },
+  });
+  res.json(orgs);
+});
+
+app.post('/admin/organizations', adminMiddleware, async (req, res) => {
+  const { name, slug } = req.body;
+  if (!name || !slug) {
+    res.status(400).json({ error: 'name and slug required' });
+    return;
+  }
+  if (!/^[a-z0-9-]+$/.test(slug)) {
+    res.status(400).json({ error: 'slug must be lowercase alphanumeric with hyphens only' });
+    return;
+  }
+
+  const apiKey = `ak_${Buffer.from(crypto.randomUUID()).toString('base64url').slice(0, 32)}`;
+  try {
+    const org = await prisma.organization.create({
+      data: { name, slug, apiKey, status: 'active', plan: 'pilot' },
+    });
+    res.json({ id: org.id, name: org.name, slug: org.slug, apiKey: org.apiKey, webhookUrl: `https://agentive-engine.fly.dev/webhooks/leads?orgSlug=${org.slug}` });
+  } catch (err) {
+    if ((err as Error).message.includes('P2002')) {
+      res.status(409).json({ error: 'Organization slug already exists' });
+      return;
+    }
+    logger.error('Failed to create organization', { error: (err as Error).message });
+    res.status(500).json({ error: 'Failed to create organization' });
+  }
+});
+
+app.get('/admin/organizations/:id', adminMiddleware, async (req, res) => {
+  const id = req.params.id as string;
+  const org = await prisma.organization.findUnique({ where: { id } });
+  if (!org) {
+    res.status(404).json({ error: 'Organization not found' });
+    return;
+  }
+  res.json({
+    id: org.id,
+    name: org.name,
+    slug: org.slug,
+    status: org.status,
+    plan: org.plan,
+    apiKey: org.apiKey,
+    webhookUrl: `https://agentive-engine.fly.dev/webhooks/leads?orgSlug=${org.slug}`,
+    createdAt: org.createdAt,
+    updatedAt: org.updatedAt,
+  });
+});
+
+app.patch('/admin/organizations/:id', adminMiddleware, async (req, res) => {
+  const id = req.params.id as string;
+  const { name, status, plan } = req.body;
+  try {
+    const org = await prisma.organization.update({
+      where: { id },
+      data: { name, status, plan, updatedAt: new Date() },
+    });
+    res.json(org);
+  } catch (err) {
+    if ((err as Error).message.includes('P2025')) {
+      res.status(404).json({ error: 'Organization not found' });
+      return;
+    }
+    res.status(500).json({ error: 'Failed to update organization' });
+  }
+});
+
+app.post('/admin/organizations/:id/rotate-key', adminMiddleware, async (req, res) => {
+  const id = req.params.id as string;
+  const newApiKey = `ak_${Buffer.from(crypto.randomUUID()).toString('base64url').slice(0, 32)}`;
+  try {
+    const org = await prisma.organization.update({
+      where: { id },
+      data: { apiKey: newApiKey, updatedAt: new Date() },
+    });
+    res.json({ id: org.id, apiKey: org.apiKey });
+  } catch (err) {
+    if ((err as Error).message.includes('P2025')) {
+      res.status(404).json({ error: 'Organization not found' });
+      return;
+    }
+    res.status(500).json({ error: 'Failed to rotate API key' });
+  }
 });
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3001;

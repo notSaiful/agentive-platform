@@ -11,6 +11,7 @@ model Organization {
   id            String    @id @default(cuid())
   name          String
   slug          String    @unique
+  apiKey        String    @unique
   status        String    @default("active")
   plan          String    @default("pilot")
   settings      Json?
@@ -35,6 +36,7 @@ model Organization {
 
   @@index([slug])
   @@index([status])
+  @@index([apiKey])
 }
 
 model Team {

@@ -33,4 +33,4 @@ EXPOSE 3001
 ENV NODE_ENV=production
 ENV PORT=3001
 
-CMD ["node", "packages/engine/dist/server.js"]
+CMD ["sh", "-c", "npx prisma migrate deploy --schema=packages/engine/prisma/schema.prisma && node packages/engine/dist/server.js"]

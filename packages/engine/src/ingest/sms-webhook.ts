@@ -4,6 +4,7 @@ import { COMPLIANCE, globalEmitter } from '@agentive/shared';
 
 export async function handleInboundSms(req: Request, res: Response): Promise<void> {
   const { From, Body, MessageSid } = req.body;
+  const organizationId = (req as Request & { organizationId?: string }).organizationId;
 
   const isOptOut = COMPLIANCE.OPT_OUT_KEYWORDS.some((kw: string) =>
     Body?.toUpperCase().includes(kw)
@@ -11,22 +12,24 @@ export async function handleInboundSms(req: Request, res: Response): Promise<voi
 
   try {
     if (isOptOut && From) {
+      const where = organizationId ? { phone: From, organizationId } : { phone: From };
       await prisma.contact.updateMany({
-        where: { phone: From },
+        where,
         data: { smsConsent: false },
       });
       res.type('text/xml').send('<Response></Response>');
       return;
     }
 
-    const contact = await prisma.contact.findFirst({ where: { phone: From } });
+    const contactWhere = organizationId ? { phone: From, organizationId } : { phone: From };
+    const contact = await prisma.contact.findFirst({ where: contactWhere });
     if (!contact) {
       res.type('text/xml').send('<Response></Response>');
       return;
     }
 
     const lead = await prisma.lead.findFirst({
-      where: { contactId: contact.id },
+      where: { contactId: contact.id, organizationId: contact.organizationId },
       orderBy: { createdAt: 'desc' },
     });
     if (!lead) {
