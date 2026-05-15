@@ -37,7 +37,7 @@ packages/
   shared/       -- Zod schemas, domain types, constants, event emitter, fair-housing filter
   engine/       -- Express API, agents, orchestrator, queue, analytics (core backend)
   integrations/ -- Third-party adapters: Twilio (SMS), Follow Up Boss (CRM), Cal.com (calendar)
-  dashboard/    -- Next.js 15 App Router (scaffolded, app/ is empty)
+  dashboard/    -- Next.js 15 App Router with full pages: Dashboard, Leads, Conversations, Appointments, Escalations, Nurture, Alerts, Admin (+ guide, legal pages)
 ```
 
 **Dependency graph:** `shared <- engine <- integrations`, `shared <- dashboard`, `engine <- integrations` (CalClient used by booking).
@@ -60,9 +60,23 @@ packages/
 
 ### Prisma Schema (packages/engine/prisma/schema.prisma)
 
-8 models: Contact, Lead, Conversation, Message, Appointment, Escalation, CommunicationEvent, AgentEvent, Outcome. All use `cuid()` IDs. Key relations: Contact 1:N Lead/Conversation/Appointment, Lead 1:N Conversation/Appointment/Escalation, Conversation 1:N Message.
+9 models: Organization, Contact, Lead, Conversation, Message, Appointment, Escalation, CommunicationEvent, AgentEvent, Outcome. All use `cuid()` IDs. Key relations: Organization 1:N Contact/Lead, Contact 1:N Lead/Conversation/Appointment, Lead 1:N Conversation/Appointment/Escalation, Conversation 1:N Message. Organization model includes `apiKey` (unique) and `slug` for multi-tenancy.
 
-### Missing Implementations (as of init)
+### Multi-Tenancy & Admin
+
+- Organizations are isolated by `apiKey` (header `x-api-key`) or webhook query params (`?orgSlug=` / `?orgId=`)
+- Admin endpoints (`/admin/organizations/*`) protected by `ADMIN_API_KEY`
+- Admin dashboard at `/admin` supports: list orgs, create org, view API key + webhook URL, rotate keys
+- Lead source connection guide at `/admin/guide`
+
+### Legal Compliance Pages
+
+Dashboard includes static pages:
+- `/privacy` — Privacy Policy (DPDP Act 2023 compliant)
+- `/terms` — Terms of Service
+- `/tcpa` — Consent & TCPA/Opt-In Policy
+
+### Missing Implementations (as of May 2026)
 
 These files are imported by engine source but do not exist on disk yet:
 - `packages/engine/src/db/client.ts` — Prisma client singleton (imported as `prisma`)
@@ -70,7 +84,16 @@ These files are imported by engine source but do not exist on disk yet:
 - `packages/engine/src/llm/prompts/qualification-starter.ts` — system prompt for first outbound message
 - `packages/engine/src/llm/prompts/conversation-loop.ts` — system prompt for ongoing qualification conversation
 
-Dashboard `app/` directory is empty. SendGrid/nodemailer deps declared but unused. HubSpot in `.env.example` but no integration class.
+SendGrid/nodemailer deps declared but unused. HubSpot in `.env.example` but no integration class.
+
+### Deployment
+
+| Service | Platform | URL |
+|---------|----------|-----|
+| Engine | Fly.io | `https://agentive-engine.fly.dev` |
+| Dashboard | Vercel | `https://dashboard-oy23i7wfr-notsaifuls-projects.vercel.app` |
+| Redis | Fly.io | `agentive-redis.internal:6379` (TCP service) |
+| Postgres | Fly.io | Pooler URL via `DATABASE_URL` secret |
 
 ### Test Framework
 
