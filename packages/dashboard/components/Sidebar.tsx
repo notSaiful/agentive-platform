@@ -10,6 +10,8 @@ import {
   AlertTriangle,
   HeartPulse,
   Bell,
+  Settings,
+  Shield,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -21,6 +23,7 @@ const navItems = [
   { href: '/escalations', label: 'Escalations', icon: AlertTriangle },
   { href: '/nurture', label: 'Nurture', icon: HeartPulse },
   { href: '/alerts', label: 'Alerts', icon: Bell },
+  { href: '/admin', label: 'Admin', icon: Shield },
 ];
 
 export default function Sidebar() {

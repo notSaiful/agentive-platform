@@ -30,4 +30,11 @@ export const api = {
     fetchApi(`/api/nurture/cadences?${new URLSearchParams(params || {}).toString()}`),
   getAlerts: () => fetchApi('/api/alerts'),
   getKpis: () => fetchApi('/api/kpis'),
+  // Admin endpoints
+  getOrganizations: () => fetchApi('/admin/organizations'),
+  createOrganization: (body: { name: string; slug: string }) =>
+    fetchApi('/admin/organizations', { method: 'POST', body: JSON.stringify(body) }),
+  getOrganization: (id: string) => fetchApi(`/admin/organizations/${id}`),
+  rotateApiKey: (id: string) =>
+    fetchApi(`/admin/organizations/${id}/rotate-key`, { method: 'POST' }),
 };
